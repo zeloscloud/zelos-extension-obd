@@ -206,6 +206,9 @@ def probe(vehicle: Vehicle) -> dict[int, bytes]:
                 break
             if got:
                 vehicle.protocol = protocol
+                for r, data in got.items():
+                    for row in obd.decode(data[0], data[1:], r):
+                        _advertised(vehicle, r, row)
                 if payload == PROBE_F400:
                     for r in got:
                         vehicle.note(f"0x{r:X} answered 22 F400 but not 22 F810")

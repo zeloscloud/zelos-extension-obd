@@ -98,3 +98,14 @@ def test_busy_six_times_is_not_compliant(scripted):
     with pytest.raises(scan.NoAnswer, match="6 initialization sequences"):
         scan.probe(vehicle)
     assert [sdu for _, sdu in fake.requests].count(b"\x01\x00") == 6
+
+
+def test_answer_to_an_unadvertised_pid_is_noted(scripted):
+    """J1699-3: an ECU answers only PIDs its bitmap lists; the answer is kept and noted."""
+    script, run = scripted
+    script.add(0x7DF, b"\x01\x00", [reply(ECU, bytes.fromhex("410080000000"))])  # PID 01 only
+    script.add(0x7DF, b"\x01\x0c", [reply(ECU, bytes.fromhex("410C1AF8"))])
+    vehicle, _ = run(protocol="legacy")
+    result = scan.read_pids(vehicle, [0x0C])
+    assert result["responders"]["07e8"]["values"] == {"EngineRPM": 1726.0}
+    assert result["compliance"] == ["0x7E8 answered PID 0C, which its bitmap does not list"]
