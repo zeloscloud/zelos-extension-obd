@@ -4,7 +4,10 @@
 answers, flow control on the responder's physical id). `DoipLink` owns one DoIP
 connection; a request to the functional address is answered from each ECU's logical
 address. Both return (responder, answer, seconds from the request) per final answer;
-response-pending answers (NRC 0x78) are waited through.
+response-pending answers (NRC 0x78) are waited through, `max_pending` of them at most.
+`physical` sends to one responder's physical request id (or DoIP logical address).
+
+ISO 15765-4:2005 7: a diagnostic frame with DLC below 8 is ignored on receive.
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import can
+import isotp
 from zelos_can import doip
 from zelos_can import isotp as diag
 
@@ -29,33 +33,54 @@ class Answer:
     responder: int
     data: bytes
     elapsed_s: float
+    #: Response-pending (NRC 0x78) answers before `data`.
+    pending: int = 0
 
 
 def pending(data: bytes) -> bool:
     return len(data) >= 3 and data[0] == 0x7F and data[2] == PENDING
 
 
+def short(msg: can.Message) -> bool:
+    return not msg.is_fd and msg.dlc < 8
+
+
 class _Arrivals(can.Listener):
-    """When each responder's first frame came, for `elapsed_ms`."""
+    """When each responder's first frame came, for `elapsed_ms`; who sent a short frame."""
 
     def __init__(self, responders: Any, extended: bool) -> None:
         self.responders, self.extended = responders, extended
         self.first: dict[int, float] = {}
+        self.short: set[int] = set()
 
     def on_message_received(self, msg: can.Message) -> None:
         if msg.is_extended_id == self.extended and msg.arbitration_id in self.responders:
+            if short(msg):
+                self.short.add(msg.arbitration_id)
+                return
             self.first.setdefault(msg.arbitration_id, time.monotonic())
 
 
 class _Errors(can.Listener):
+    """Receive failures (the link is down) and error frames seen (wrong bitrate?)."""
+
     def __init__(self) -> None:
         self.error: str = ""
+        self.error_frames = 0
 
     def on_message_received(self, msg: can.Message) -> None:
-        pass
+        self.error_frames += msg.is_error_frame
 
     def on_error(self, exc: Exception) -> None:
         self.error = self.error or f"CAN receive failed: {exc}"
+
+
+class _Stack(isotp.NotifierBasedCanStack):
+    """ISO-TP stack that ignores classic frames with DLC below 8."""
+
+    def _on_message_received(self, msg: can.Message) -> None:
+        if not short(msg):
+            super()._on_message_received(msg)
 
 
 class CanLink:
@@ -109,10 +134,18 @@ class CanLink:
 
     def _add_stacks(self, responders: Any) -> None:
         assert self.bus is not None and self.notifier is not None
-        new = [r for r in responders if r not in self.stacks]
-        self.stacks.update(
-            diag.responder_stacks(self.bus, self.notifier, new, self.extended, self.params)
-        )
+        for rx in responders:
+            if rx in self.stacks:
+                continue
+            address = diag.address(diag.request_id(rx, self.extended), rx, self.extended)
+            stack = _Stack(self.bus, self.notifier, address=address, params=self.params)
+            stack.start()
+            self.stacks[rx] = stack
+
+    @property
+    def error_frames(self) -> int:
+        """Error frames received since `open`."""
+        return self._errors.error_frames
 
     def _stop_stacks(self) -> None:
         stacks, self.stacks = self.stacks, {}
@@ -147,13 +180,16 @@ class CanLink:
         ]
         return f"ISO-TP stack for 0x{dead[0]:X} stopped (CAN send failed?)" if dead else None
 
-    def functional(self, payload: bytes) -> list[Answer]:
-        """One functional single frame; every responder's final answer."""
-        if self.bus is None or self.notifier is None:
-            raise ConnectionError("bus not open")
+    def _drain(self) -> None:
         for stack in self.stacks.values():
             while stack.recv(block=False) is not None:  # late answers to an earlier request
                 pass
+
+    def functional(self, payload: bytes, max_pending: int | None = None) -> list[Answer]:
+        """One functional single frame; every responder's final answer."""
+        if self.bus is None or self.notifier is None:
+            raise ConnectionError("bus not open")
+        self._drain()
         arrivals = _Arrivals(self.responders, self.extended)
         self.notifier.add_listener(arrivals)
         start = time.monotonic()
@@ -166,27 +202,61 @@ class CanLink:
             )  # fmt: skip
         finally:
             self.notifier.remove_listener(arrivals)
-        answers = self._finals(got, start, arrivals.first)
+        # a single frame from a responder without a stack bypasses `_Stack`'s DLC check
+        got = [(r, d) for r, d in got if r in self.stacks or r not in arrivals.short]
+        answers = self._finals(got, start, arrivals.first, max_pending)
         if self.extended:
             self.known |= {a.responder for a in answers}
             self._add_stacks(self.known)
         return answers
 
-    def _finals(self, got: list[tuple[int, bytes]], start: float, first: dict) -> list[Answer]:
+    def physical(
+        self, responder: int, payload: bytes, max_pending: int | None = None
+    ) -> list[Answer]:
+        """One request on `responder`'s physical request id (multi-frame if long); its answer."""
+        if self.bus is None or self.notifier is None:
+            raise ConnectionError("bus not open")
+        self._add_stacks([responder])
+        self._drain()
+        stack = self.stacks[responder]
+        arrivals = _Arrivals((responder,), self.extended)
+        self.notifier.add_listener(arrivals)
+        start = time.monotonic()
+        try:
+            stack.send(payload)
+            sdu, deadline = None, start + self.window
+            while sdu is None and (time.monotonic() < deadline or stack.is_rx_active()):
+                if time.monotonic() > start + max(1.0, 10 * self.window):
+                    break
+                sdu = stack.recv(block=True, timeout=0.005)
+        finally:
+            self.notifier.remove_listener(arrivals)
+        if sdu is None:
+            return []
+        self.known.add(responder)
+        return self._finals([(responder, bytes(sdu))], start, arrivals.first, max_pending)
+
+    def _finals(
+        self, got: list[tuple[int, bytes]], start: float, first: dict, max_pending: int | None
+    ) -> list[Answer]:
         """Last answer per responder; a response-pending one is waited through on the
-        responder's stack, `p2_star_timeout` per 0x78."""
+        responder's stack, `p2_star_timeout` per 0x78, `max_pending` re-waits at most."""
         last: dict[int, bytes] = {}
         for responder, data in got:
             last[responder] = data
         out = []
         for responder, data in last.items():
-            stack = self.stacks.get(responder)
+            stack, count = self.stacks.get(responder), 0
             while pending(data) and stack is not None:
+                count += 1
+                if max_pending is not None and count > max_pending:
+                    break
                 more = stack.recv(block=True, timeout=self.star)
                 if more is None:
                     break
                 data = bytes(more)
-            out.append(Answer(responder, data, first.get(responder, time.monotonic()) - start))
+            elapsed = first.get(responder, time.monotonic()) - start
+            out.append(Answer(responder, data, elapsed, count))
         return out
 
 
@@ -226,14 +296,29 @@ class DoipLink:
             return str(e)
         return None
 
-    def functional(self, payload: bytes) -> list[Answer]:
+    @property
+    def error_frames(self) -> int:
+        return 0
+
+    def functional(self, payload: bytes, max_pending: int | None = None) -> list[Answer]:
+        return self._request(self.address, payload, max_pending)
+
+    def physical(
+        self, responder: int, payload: bytes, max_pending: int | None = None
+    ) -> list[Answer]:
+        return [
+            a for a in self._request(responder, payload, max_pending) if a.responder == responder
+        ]
+
+    def _request(self, target: int, payload: bytes, max_pending: int | None) -> list[Answer]:
         client = self.client
         if client is None:
             raise ConnectionError("DoIP not connected")
         client.drain()
         start = time.monotonic()
-        client.request(self.address, payload, self.cfg.timeout)
+        client.request(target, payload, self.cfg.timeout)
         last: dict[int, tuple[bytes, float]] = {}
+        counts: dict[int, int] = {}
         #: The window restarts per answer; a responder that answered 0x78 gets P2* from it.
         heard, waiting = time.monotonic(), {}
         while True:
@@ -253,8 +338,10 @@ class DoipLink:
             data, heard = bytes(data), time.monotonic()
             last[source] = (data, last.get(source, (b"", heard))[1])
             if pending(data):
-                waiting[source] = heard + self.star
-            else:
-                waiting.pop(source, None)
+                counts[source] = counts.get(source, 0) + 1
+                if max_pending is None or counts[source] <= max_pending:
+                    waiting[source] = heard + self.star
+                    continue
+            waiting.pop(source, None)
         self.known |= set(last)
-        return [Answer(r, d, t - start) for r, (d, t) in last.items()]
+        return [Answer(r, d, t - start, counts.get(r, 0)) for r, (d, t) in last.items()]
