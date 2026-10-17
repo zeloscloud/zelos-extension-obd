@@ -7,12 +7,21 @@
 - [uv](https://docs.astral.sh/uv/)
 - [just](https://github.com/casey/just)
 
+## Setup
+
+```bash
+git clone https://github.com/zeloscloud/zelos-extension-obd
+just install
+```
+
 ## Commands
 
 | Command                | Description                                 |
 | ---------------------- | ------------------------------------------- |
 | `just install`         | Install dependencies and pre-commit hooks   |
 | `just dev`             | Run extension locally                       |
+| `just sim`             | Run the demo vehicle on vcan0               |
+| `just sim-doip`        | Run the DoIP entity simulator               |
 | `just format`          | Format code with ruff                       |
 | `just check`           | Lint with ruff                              |
 | `just test`            | Run tests with pytest                       |
