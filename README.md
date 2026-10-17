@@ -73,7 +73,7 @@ A bus is one vehicle: two entries on one interface and channel are refused. PCAN
 | `OBD/<vehicle>/<responder>/dtc` | one row per DTC: `code` (`P0420`, `P0420-00`), `raw`, `kind` (stored / pending / permanent), `count`; J1979-2: `status`, its 8 ISO 14229-1 bits, `severity`. An empty list is one row with `count` 0 |
 | `OBD/<vehicle>/<responder>/vehicle_info` | `infotype`, `vin`, `calid`, `cvn`, `ecu_name` |
 
-`<responder>` is the CAN id as the CAN extension's passive decode names it (`07e8`, `18daf110`), or the DoIP address (`1001`). Columns are the `zelos_can.obd` catalogue's, so active and passive rows line up.
+`<responder>` is the CAN id as the CAN extension's passive decode names it (`07e8`, `18daf110`), or the DoIP address (`1001`). Columns, units and value tables (`FuelSystem1Status`, `OBDStandard`, ...) are the `zelos_can.obd` catalogue's, so active and passive rows line up.
 
 ## Actions
 

@@ -75,35 +75,31 @@ INFO_FIELDS = [
     *(_F(name, _T.String) for name in ("vin", "calid", "cvn", "ecu_name")),
 ]
 
-_TYPES = {bool: _T.Boolean, int: _T.UInt8, float: _T.Float64, str: _T.String}
+_TYPES = {"bool": _T.Boolean, "int": _T.UInt8, "float": _T.Float64, "str": _T.String}
 
 
 @functools.cache
-def pid_columns() -> dict[str, tuple[Any, str | None]]:
-    """Every catalogue column: (type, unit). Types from the catalogue's own decode of
-    answers to each PID: all 0x00, all 0xFF, and all 0xFF but one bit (layout switches such
-    as PID 01's ignition bit); units of single-column PIDs."""
-    out: dict[str, tuple[Any, str | None]] = {}
+def pid_columns() -> dict[str, dict[str, Any]]:
+    """Every catalogue column by name, as `zelos_can.obd.pids()` gives it (type, unit,
+    value table): the passive decoder's `<id>_OBD2` schema."""
+    out: dict[str, dict[str, Any]] = {}
     for p in obd.pids():
-        unit = (p["unit"] or None) if len(p["columns"]) == 1 else None
-        n = p["bytes"]
-        fills = [bytes(n), b"\xff" * n]
-        fills += [(((1 << 8 * n) - 1) ^ (1 << b)).to_bytes(n, "big") for b in range(8 * n)]
-        for data in fills:
-            for row in obd.decode(0x41, bytes([p["pid"]]) + data):
-                for column, value in row.get("values", {}).items():
-                    out.setdefault(column, (_TYPES[type(value)], unit))
-        for column in p["columns"]:
-            out.setdefault(column, (_T.Float64, unit))
+        for c in p["columns"]:
+            out.setdefault(c["name"], c)
     return out
 
 
 def units() -> dict[str, str]:
-    return {c: u for c, (_, u) in pid_columns().items() if u}
+    return {n: c["unit"] for n, c in pid_columns().items() if c["unit"]}
 
 
 def _pid_fields(*extra: Any) -> list:
-    return [*extra, *(_F(c, t, u) for c, (t, u) in pid_columns().items())]
+    cols = pid_columns().values()
+    return [*extra, *(_F(c["name"], _TYPES[c["type"]], c["unit"]) for c in cols)]
+
+
+def _pid_tables() -> dict[str, dict[int, str]]:
+    return {n: c["values"] for n, c in pid_columns().items() if c["values"]}
 
 
 class Trace:
@@ -138,11 +134,15 @@ class Trace:
         self._source.log(self._declare("rx", RX_FIELDS, {}), row)
 
     def pids(self, responder: str, service: int, values: dict[str, Any]) -> None:
-        name = self._declare(f"{responder}/pids", _pid_fields(_F("service", _T.UInt8)), {})
+        name = self._declare(
+            f"{responder}/pids", _pid_fields(_F("service", _T.UInt8)), _pid_tables()
+        )
         self._source.log(name, {"service": service, **values})
 
     def freeze_frame(self, responder: str, frame: int, values: dict[str, Any]) -> None:
-        name = self._declare(f"{responder}/freeze_frame", _pid_fields(_F("frame", _T.UInt8)), {})
+        name = self._declare(
+            f"{responder}/freeze_frame", _pid_fields(_F("frame", _T.UInt8)), _pid_tables()
+        )
         self._source.log(name, {"frame": frame, **values})
 
     def dtc(self, responder: str, row: dict[str, Any]) -> None:
