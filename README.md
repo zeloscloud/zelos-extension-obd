@@ -84,14 +84,14 @@ Available as `OBD/<action>`. Each takes `vehicle`, and those that transmit an op
 | `list_vehicles`, `get_status` | | Vehicles; state, protocol, responders seen, polling tasks, counters. Send nothing |
 | `detect` | 22 F810 / 01 00 | ISO 15765-4 initialization: 11-bit and 29-bit at the configured bitrate (500 kbit/s), first answered kept; NRC 0x21 restarts it after 200 ms, 6 times at most. 250 kbit/s only after bus errors at 500 (a wrong bitrate causes error frames on a running bus), and only on adapters the extension sets |
 | `supported_pids` | 01/02/09 00, 20, ... | Bitmap walk per ECU |
-| `read_pids` | 01 / 22 F4xx | Up to 6 PIDs per request, decoded with units |
-| `monitor_status` | 01 01 / 22 F501 | MIL, DTC count, each supported monitor complete / incomplete, `ready` |
+| `read_pids` | 01 / 22 F4xx | Up to 6 PIDs per request (J1979-2 functional on CAN: 3, one single frame), decoded with units |
+| `monitor_status` | 01 01 / 22 F501 | MIL, DTC count; J1979: each supported monitor complete / incomplete, `ready` |
 | `read_dtcs` | 03 07 0A / 19 42 19 55 | Stored, pending, permanent |
 | `freeze_frame` | 02 / 19 42 + 19 04 | Frame 0: its DTC and PIDs. J1979-2: first and latest snapshot (records 00 / F0) of each pending or confirmed DTC, asked of its ECU |
 | `vehicle_info` | 09 02/04/06/0A / 22 F8xx | VIN, CALID, CVN, ECU name |
 | `test_results` | 06 / 22 F6xx | One monitor id, raw |
-| `clear_dtcs` | 04 / 14 FFFF33 | `confirm` off (default): reads 03/07, returns `status: refused`, `would_clear` and the warning; no clear is sent. On: clears every ECU, each one's acknowledgement (NRC 0x22: key on, engine off) |
-| `start_polling`, `stop_polling` | 01 | PIDs every `period_s` into the trace; `task_id` per PID set |
+| `clear_dtcs` | 04 / 14 FFFF33 | `confirm` off (default): reads stored and pending DTCs, returns `status: refused`, `would_clear` and the warning; no clear is sent. On: clears every ECU, each one's acknowledgement (NRC 0x22: key on, engine off) |
+| `start_polling`, `stop_polling` | 01 / 22 F4xx | PIDs every `period_s` into the trace; `task_id` per PID set |
 | `auto_config`, `list_interfaces` | | Settings form helpers; run with the extension stopped |
 
 A clear erases stored and pending DTCs, freeze frames and readiness: every monitor reads not complete until a full drive cycle, and an inspection fails meanwhile. Permanent DTCs remain.
@@ -123,9 +123,19 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### Demo vehicle
 
-`zelos_extension_obd/demo/` is the bench DC-DC node's OBD-II responder in Python, to its firmware's contract, plus an engine ECU with readiness monitors: 0x7E8 engine (P0420 confirmed and permanent, P0171 pending), 0x7E9 DC-DC, 0x7EA DC-DC with a lost BMS (U0111 active, back after a clear). 29-bit: 0x18DAF110 + n.
+`zelos_extension_obd/demo/` is the bench DC-DC node's OBD-II responder in Python, to its firmware's contract, plus an engine ECU. Each answers J1979 and J1979-2 on one DTC memory; it answers 22 F810, so `auto` reads it as J1979-2 (`protocol: legacy` for J1979).
+
+| ECU | Shows |
+|---|---|
+| 0x7E8 engine | P0420 confirmed, MIL on, permanent; P0171 pending; readiness monitors, PID 41, test results (06), in-use ratios (09 08); the only VIN |
+| 0x7E9 DC-DC | no faults |
+| 0x7EA DC-DC, BMS lost | U0111 confirmed; after a clear it returns pending, confirmed the next cycle |
+
+DTCs confirm on a second failing cycle, the MIL goes off after 3 passing cycles, a confirmed code ages out after 40, a permanent code goes with the MIL, or after one passing cycle following a clear. ECUReset (11 01) ends an operation cycle. A DC-DC whose BMS state is `None` (`DemoVehicle(profiles=(("dcdc", None),))`) watches BMS_Limits (0x201) on its bus, as the node does. 29-bit: 0x18DAF110 + n.
 
 The zelos-examples OBD-II conformance suite is vendored in `tests/conformance` and runs in `just test` against one DC-DC responder, on CAN and through the DoIP entity simulator (`tests/doip_entity.py`: tester 0x0E80, ECUs 0x1001 + n, functional 0xE400). Update it with `just sync-conformance ~/zelos/zelos-examples`; `ZELOS_EXAMPLES=<checkout> just test` checks the copy against upstream.
+
+`tests/test_replay.py` replays real vehicles' OBD-II traffic (`tests/fixtures/obd`, MIT, licences in `LICENSES`) through the client against an independent oracle, and sends their requests to the demo. Update the traces with `just sync-replay ~/zelos/src`; `ZELOS_SRC=<checkout>` checks them against upstream.
 
 ```bash
 just sim                       # vcan0, Linux
