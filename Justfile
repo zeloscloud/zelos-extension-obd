@@ -1,0 +1,86 @@
+set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
+
+default:
+    @just --list
+
+# Install dependencies
+install:
+    uv sync
+    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
+        uv run pre-commit install; \
+    else \
+        echo "Not a git repository: skipped the pre-commit hooks. Run git init, then just install."; \
+    fi
+
+# Install dependencies for CI (no pre-commit hooks)
+ci-install:
+    uv sync --locked
+
+# Format code
+format:
+    uv run ruff format .
+    uv run ruff check --fix .
+
+# Check formatting (no changes)
+format-check:
+    uv run ruff format --check .
+    uv run ruff check .
+
+# Run checks
+check:
+    uv run ruff check .
+
+# Run tests
+test:
+    uv run pytest
+
+# Run extension locally
+dev:
+    uv run python main.py
+
+# Package for Zelos marketplace
+package:
+    zelos extensions package .
+
+# Run all CI checks
+ci:
+    uv sync
+    just format-check
+    just check
+    just test
+    just package
+
+# Release: bump version, format, check, test, commit, tag
+release VERSION:
+    #!/usr/bin/env bash
+    set -eux -o pipefail
+    git diff-index --quiet HEAD || (echo "Uncommitted changes! Commit or stash first." && exit 1)
+    zelos extensions bump "{{VERSION}}"
+    just format
+    uv lock
+    just check
+    just test
+    git add -A
+    git commit -m "Release v{{VERSION}}"
+    git tag -a "v{{VERSION}}" -m "Release v{{VERSION}}"
+    echo ""
+    echo "✓ Release v{{VERSION}} ready!"
+    echo ""
+    echo "Push with: git push --follow-tags"
+
+# Delete a GitHub release, its remote+local tag, and force-push
+delete-release VERSION:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tag="v{{VERSION}}"
+    gh release delete "$tag" --yes 2>/dev/null && echo "✓ release deleted" || echo "- no release found"
+    git push origin --delete "$tag" 2>/dev/null && echo "✓ remote tag deleted" || echo "- no remote tag"
+    git tag -d "$tag" 2>/dev/null && echo "✓ local tag deleted" || echo "- no local tag"
+    git push --force-with-lease
+    echo ""
+    echo "✓ Cleaned up $tag — ready to re-release"
+
+# Clean build artifacts
+clean:
+    rm -rf dist build .pytest_cache .ruff_cache *.tar.gz .artifacts
+    find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true

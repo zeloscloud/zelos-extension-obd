@@ -1,0 +1,20 @@
+name = "Zelos Extension Obd"
+version = "0.1.0"
+description = "OBD-II scan tool extension for Zelos"
+author = "Zelos"
+repository = "https://github.com/zeloscloud/zelos-extension-obd"
+icon = "assets/icon.svg"
+readme = "README.md"
+
+[config]
+schema = "config.schema.json"
+
+[host]
+type = "agent"
+
+[host.agent]
+entry = "main.py"
+python_version = "3.11"
+
+[package]
+paths = ["main.py", "zelos_extension_obd"]
