@@ -64,10 +64,12 @@ def test_a_functional_request_is_one_padded_single_frame_and_every_ecu_answers(c
     vehicle, sniffer = car
     result = scan.read_pids(vehicle, scan.parse_pids("EngineRPM, 42"))
     sent = [m for m in sniffer.frames if m.arbitration_id == 0x7DF]
-    # The protocol probe, then the read: ISO 15765-4 frames, DLC 8, padding 0xCC.
+    # The protocol probes (22 F810 first, ISO 15765-4:2021 6.1.1; this demo predates it),
+    # then the read: ISO 15765-4 frames, DLC 8, padding 0xCC.
     assert [bytes(m.data) for m in sent] == [
+        bytes.fromhex("0322F810CCCCCCCC"),
         bytes.fromhex("020100CCCCCCCCCC"),
-        bytes.fromhex("0301 0C42 CCCCCCCC".replace(" ", "")),
+        bytes.fromhex("03010C42CCCCCCCC"),
     ]
     assert all(m.dlc == 8 and not m.is_extended_id for m in sent)
     assert set(result["responders"]) == {"07e8", "07e9", "07ea"}
@@ -111,6 +113,27 @@ def test_29_bit_obd_on_uds_is_probed_and_reassembles_per_ecu(car):
     assert flow and all(m.data[0] >> 4 == 3 and m.dlc == 8 for m in flow)  # our flow control
     dtcs = scan.read_dtcs(vehicle)["responders"]["18daf110"]
     assert dtcs["stored"] == ["P0420-00"] and dtcs["status"]["P0171-00"] == "0x26"
+
+
+def test_ecu_is_addressed_physically(car):
+    vehicle, sniffer = car
+    result = scan.read_pids(vehicle, [0x42], ecu=0x7E9)
+    assert set(result["responders"]) == {"07e9"}
+    assert {m.arbitration_id for m in sniffer.frames if m.arbitration_id < 0x7E8} == {0x7E1}
+
+
+def test_detect_does_not_fall_back_to_250k_on_silence(monkeypatch):
+    """ISO 15765-4:2005 4.1-4.2: the next bitrate only after a bus error, never on silence."""
+    config = json.dumps({"interface": "virtual", "channel": f"obd-e2e-{next(_channels)}"})
+    vehicle = _open(Vehicle("car", Interface.OTHER, {"config_json": config},
+                            dict(ADVANCED_DEFAULTS)))  # fmt: skip
+    monkeypatch.setattr(vehicle, "can_set_bitrate", lambda: True)
+    try:
+        with pytest.raises(scan.NoAnswer, match="250000 was not tried"):
+            scan.detect(vehicle)
+    finally:
+        vehicle.stop()
+        vehicle.join(3)
 
 
 @pytest.mark.parametrize("car", [({"extended": True}, {})], indirect=True)
