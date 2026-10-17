@@ -116,7 +116,7 @@ uv run main.py info --interface doip --host 192.168.77.2
 | `detect`, `pids` (`--service`), `read` (`--pids`) | `detect`, `supported_pids`, `read_pids` |
 | `status`, `dtcs`, `freeze`, `info`, `tests` (`--mid`), `ratios` | `monitor_status`, `read_dtcs`, `freeze_frame`, `vehicle_info`, `test_results`, `in_use_ratios` |
 | `clear` (`--yes`) | `clear_dtcs` (`confirm`) |
-| `demo-ecu` | Runs the demo vehicle on any python-can bus |
+| `demo-ecu` | Runs the demo vehicle on a virtual bus (`virtual`, `zelos-virtual`, SocketCAN `vcan*`); refused on any other |
 
 Every subcommand takes `--interface`, `--channel`, `--bitrate`, `--addressing`, `--protocol`, `--p2`; `other` takes `--config-json`, `zelos-ssh-socketcan` `--remote-host`, `doip` `--host`, `--port`, `--tester-address`, `--ecu-address`, `--discover`. Output is JSON; exit 1 on error.
 

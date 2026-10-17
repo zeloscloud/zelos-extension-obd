@@ -686,6 +686,19 @@ def _need(ok: bool, code: int) -> None:
 # ─── On a CAN bus ──────────────────────────────────────────────────────────
 
 PROFILES = (("engine", False), ("dcdc", False), ("dcdc", True))
+#: Buses the demo may answer on: in-process ones, and SocketCAN `vcan*`. Never a vehicle's.
+VIRTUAL_INTERFACES = ("virtual", "zelos-virtual")
+SOCKETCAN_INTERFACES = ("socketcan", "zelos-socketcan")
+
+
+def check_virtual(interface: str, channel: str) -> None:
+    """Refuse a bus a real ECU could be on: fake emission ECUs there answer (and ack clears)."""
+    if interface in VIRTUAL_INTERFACES:
+        return
+    if interface in SOCKETCAN_INTERFACES and str(channel).startswith("vcan"):
+        return
+    raise ValueError(f"the demo vehicle runs on a virtual bus only (virtual, zelos-virtual or "
+                     f"SocketCAN vcan*), not {interface} {channel}")  # fmt: skip
 
 
 def response_id(index: int, extended: bool) -> int:
@@ -708,6 +721,7 @@ class DemoVehicle:
         uds_only: bool = False,
     ) -> None:
         self.link = {"interface": interface or "zelos-virtual", "channel": channel}
+        check_virtual(self.link["interface"], channel)
         if bitrate:
             self.link["bitrate"] = bitrate
         self.extended = extended

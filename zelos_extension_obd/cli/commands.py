@@ -209,7 +209,8 @@ def clear(vehicle, yes: bool, ecu) -> dict:
 
 
 @click.command("demo-ecu")
-@click.option("--interface", default=None, help="python-can interface; default: in-process bus")
+@click.option("--interface", default=None,
+              help="virtual, zelos-virtual or socketcan (vcan*); default: in-process")  # fmt: skip
 @click.option("--channel", default="obd-demo", show_default=True)
 @click.option("--bitrate", type=int, default=None)
 @click.option("--extended", is_flag=True, help="29-bit: 0x18DAF110 + n")
@@ -217,7 +218,8 @@ def clear(vehicle, yes: bool, ecu) -> dict:
               help="1: 0x7E8 DC-DC only (the bench node's contract)")  # fmt: skip
 @click.option("--uds-only", is_flag=True, help="Answer J1979-2 (OBDonUDS) only")
 def demo_ecu(interface, channel, bitrate, extended, responders, uds_only) -> None:
-    """Run the demo vehicle: an engine ECU and two DC-DC converters answering OBD-II.
+    """Run the demo vehicle: an engine ECU and two DC-DC converters answering OBD-II, on a
+    virtual bus only (refused on a real one).
 
     \b
     Example:
@@ -228,7 +230,11 @@ def demo_ecu(interface, channel, bitrate, extended, responders, uds_only) -> Non
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())
     try:
-        demo = DemoVehicle(channel, interface, bitrate, extended, profiles, uds_only).start()
+        demo = DemoVehicle(channel, interface, bitrate, extended, profiles, uds_only)
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
+    try:
+        demo.start()
     except Exception as e:
         raise click.ClickException(f"cannot open CAN {interface} {channel}: {e}") from e
     if interface is None:

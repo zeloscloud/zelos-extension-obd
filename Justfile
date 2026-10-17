@@ -38,11 +38,11 @@ test:
 dev:
     uv run python main.py
 
-# Run the demo vehicle to point a scan tool at, e.g. --interface socketcan --channel vcan0
+# Run the demo vehicle on a virtual bus (vcan* or in-process; a real bus is refused)
 sim *ARGS="--interface socketcan --channel vcan0":
     uv run python main.py demo-ecu {{ARGS}}
 
-# Run the DoIP entity simulator (the demo vehicle over DoIP), e.g. --host 0.0.0.0
+# Run the DoIP entity simulator (the demo vehicle over DoIP) on loopback
 sim-doip *ARGS="--host 127.0.0.1":
     uv run python tests/doip_entity.py {{ARGS}}
 

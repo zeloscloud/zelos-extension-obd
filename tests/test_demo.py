@@ -4,6 +4,8 @@ The conformance suite drives two-cycle confirmation, healing and permanent relea
 bus; these are the firmware ztest's remaining cases (lib/uds tests) and the engine's own.
 """
 
+import pytest
+
 from zelos_extension_obd.demo import Responder
 from zelos_extension_obd.demo import vehicle as demo
 
@@ -67,3 +69,10 @@ def test_engine_results_and_ratios_follow_a_clear(monkeypatch):
     assert (
         int.from_bytes(r.request(b"\x09\x08")[5:7], "big") == int.from_bytes(ratios[5:7], "big") + 1
     )  # IGNCNTR
+
+
+def test_demo_refuses_a_real_bus():
+    """Fake emission ECUs on a vehicle bus would answer real testers and ack their clears."""
+    for interface, channel in (("socketcan", "can0"), ("pcan", "PCAN_USBBUS1")):
+        with pytest.raises(ValueError, match="virtual bus only"):
+            demo.DemoVehicle(channel, interface=interface)
