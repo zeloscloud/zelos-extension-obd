@@ -80,13 +80,17 @@ _TYPES = {bool: _T.Boolean, int: _T.UInt8, float: _T.Float64, str: _T.String}
 
 @functools.cache
 def pid_columns() -> dict[str, tuple[Any, str | None]]:
-    """Every catalogue column: (type, unit). Types from the catalogue's own decode of an
-    all-0x00 and an all-0xFF answer to each PID; units of single-column PIDs."""
+    """Every catalogue column: (type, unit). Types from the catalogue's own decode of
+    answers to each PID: all 0x00, all 0xFF, and all 0xFF but one bit (layout switches such
+    as PID 01's ignition bit); units of single-column PIDs."""
     out: dict[str, tuple[Any, str | None]] = {}
     for p in obd.pids():
         unit = (p["unit"] or None) if len(p["columns"]) == 1 else None
-        for fill in (0x00, 0xFF):
-            for row in obd.decode(0x41, bytes([p["pid"]]) + bytes([fill]) * p["bytes"]):
+        n = p["bytes"]
+        fills = [bytes(n), b"\xff" * n]
+        fills += [(((1 << 8 * n) - 1) ^ (1 << b)).to_bytes(n, "big") for b in range(8 * n)]
+        for data in fills:
+            for row in obd.decode(0x41, bytes([p["pid"]]) + data):
                 for column, value in row.get("values", {}).items():
                     out.setdefault(column, (_TYPES[type(value)], unit))
         for column in p["columns"]:
