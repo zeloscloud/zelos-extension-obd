@@ -18,7 +18,8 @@ from zelos_can import doip
 
 from zelos_extension_obd.demo import DemoVehicle, Responder
 
-DCDC = (("dcdc", False),)
+# BMS lost None: the DC-DC watches BMS_Limits on the bus, as the firmware does.
+DCDC = (("dcdc", None),)
 
 
 @pytest.fixture(scope="session", params=["can", "doip"])

@@ -2,7 +2,12 @@
 
 The worker opens the link at start, checks its health and reopens it with backoff
 (3 s doubling to 60 s). Requests run one at a time: a functional request is answered
-by every ECU, so two in flight would mix their answers.
+by every ECU, so two in flight would mix their answers. An operation may address one
+ECU physically instead (`busy(op, ecu)`).
+
+Answers that break a rule a compliant ECU follows are reported, never fixed up, in
+`notes` (results' `compliance`): late first frames (P2CAN 50 ms), NRCs where J1979 /
+J1979-2 allow none, more than one response-pending.
 """
 
 from __future__ import annotations
@@ -20,7 +25,7 @@ from zelos_can import doip
 from zelos_can import isotp as diag
 
 from zelos_extension_obd.constants import BITRATE_INTERFACES, INTERFACES, Interface, trace_layout
-from zelos_extension_obd.link import Answer, CanLink, DoipLink
+from zelos_extension_obd.link import PENDING, Answer, CanLink, DoipLink
 from zelos_extension_obd.trace import Trace
 
 logger = logging.getLogger(__name__)
@@ -32,6 +37,13 @@ STOP_BOUND = 3.0
 LOCK_TIMEOUT = 20.0
 #: ISO 13400-2 functional logical address: every ECU behind the entity.
 FUNCTIONAL_DOIP = 0xE400
+#: P2CAN: an ECU starts its answer within 50 ms (ISO 15765-4; J1699-3 fails later answers).
+P2_CAN = 0.050
+#: J1979-2 NRCs a server may not send: 0x13 on any OBD request, 0x21 on $22 (13 CCR 1968.2
+#: (g)(3.4.2)(A)-(B)); 0x78 at most once per request ((g)(3.4.2)(C)-(F)).
+NRC_LENGTH, NRC_BUSY = 0x13, 0x21
+#: Init requests: 0x21 there restarts the init (ISO 15765-4:2005 4.2.2 e).
+INIT_REQUESTS = (b"\x01\x00", b"\x22\xf8\x10")
 
 
 class State(StrEnum):
@@ -93,6 +105,12 @@ class Vehicle:
         self.counts = dict.fromkeys(("requests", "answers", "negative", "silent", "errors"), 0)
         self.lock = threading.RLock()
         self._op: str | None = None
+        #: Physical target of the operation in progress (responder id / DoIP address).
+        self.target: int | None = None
+        #: Compliance notes of this thread's last operation (actions and polls run apart).
+        self._local = threading.local()
+        #: $01 support bitmaps seen, per responder and range base.
+        self.advertised: dict[int, dict[int, set[int]]] = {}
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.polls: dict[str, Any] = {}
@@ -151,7 +169,7 @@ class Vehicle:
                         self.lock.release()
             with self.lock:
                 self.link.close()
-                self.protocol = None
+                self.protocol, self.advertised = None, {}
                 if self._stop.is_set():
                     self.state = State.STOPPED
                     break
@@ -170,29 +188,73 @@ class Vehicle:
     # ─── Requests ──────────────────────────────────────────────────────────
 
     @contextlib.contextmanager
-    def busy(self, op: str, timeout: float = LOCK_TIMEOUT) -> Iterator[None]:
+    def busy(
+        self, op: str, ecu: int | None = None, timeout: float = LOCK_TIMEOUT
+    ) -> Iterator[None]:
+        """Hold the vehicle for `op`; `ecu`: address that responder physically."""
         if not self.lock.acquire(timeout=timeout):
             raise Unavailable(f"busy: {self._op or 'a request'} in progress")
         outer, self._op = self._op, self._op or op
+        target = self.target
+        if outer is None:
+            self.target, self._local.notes = ecu, []
+        elif ecu is not None:
+            self.target = ecu
         try:
             if self.state != State.CONNECTED:
                 raise Unavailable(self.last_error or f"vehicle {self.name} is {self.state}")
             yield
         finally:
-            self._op = outer
+            self._op, self.target = outer, target
             self.lock.release()
+
+    def parse_ecu(self, text: str | None) -> int | None:
+        """A responder as results name it (`7E8`, `18DAF110`, DoIP `1001`); empty: None."""
+        text = str(text or "").strip().lower().removeprefix("0x")
+        if not text:
+            return None
+        try:
+            value = int(text, 16)
+        except ValueError:
+            raise ValueError(f"ecu {text!r} is not hex") from None
+        if isinstance(self.link, DoipLink):
+            ok = 0 <= value <= 0xFFFF
+        else:
+            ok = value in self.link.responders
+        if not ok:
+            raise ValueError(f"ecu {text!r}: not a responder id of this link")
+        return value
+
+    @property
+    def notes(self) -> list[str]:
+        return getattr(self._local, "notes", [])
+
+    def note(self, text: str) -> None:
+        if text not in self.notes:
+            self._local.notes = [*self.notes, text]
+            logger.warning("[%s] compliance: %s", self.name, text)
 
     def key(self, responder: int) -> str:
         """The responder's trace segment: `07e8`, `18daf110`, DoIP `1001`."""
         return f"{responder:08x}" if self.link.extended else f"{responder:04x}"
 
     def request(self, payload: bytes, pid: int = 0) -> dict[int, Answer]:
-        """One functional request (hold `busy`); the final answer of each responder."""
+        """One request (hold `busy`), functional or to `target`; each responder's final answer."""
+        target, uds = self.target, self.protocol == "uds"
+        address = self.link.address
+        if target is not None:
+            address = target
+            if isinstance(self.link, CanLink):
+                address = diag.request_id(target, self.link.extended)
         if self.trace:
-            self.trace.tx(payload[0], pid, self.link.address, payload[1:])
+            self.trace.tx(payload[0], pid, address, payload[1:])
         self.counts["requests"] += 1
+        max_pending = 1 if uds else None
         try:
-            answers = self.link.functional(payload)
+            if target is None:
+                answers = self.link.functional(payload, max_pending)
+            else:
+                answers = self.link.physical(target, payload, max_pending)
         except Exception:
             self.counts["errors"] += 1
             raise
@@ -205,8 +267,26 @@ class Vehicle:
             self.counts["negative"] += nrc != 0
             if self.trace:
                 self.trace.rx(payload[0], pid, a.responder, a.data[1:], nrc, a.elapsed_s * 1e3)
+            self._check(payload, a, nrc)
             out[a.responder] = a
         return out
+
+    def _check(self, payload: bytes, a: Answer, nrc: int) -> None:
+        who, sid = f"0x{a.responder:X}", payload[0]
+        if isinstance(self.link, CanLink) and a.elapsed_s > P2_CAN:
+            self.note(f"{who} answered {sid:02X} after {a.elapsed_s * 1e3:.0f} ms (P2CAN 50 ms)")
+        if a.pending > 1:
+            self.note(f"{who} sent response-pending {a.pending} times to {sid:02X} "
+                      "(J1979-2: at most once)")  # fmt: skip
+        if not nrc or nrc == PENDING or (nrc == NRC_BUSY and payload in INIT_REQUESTS):
+            return
+        if 0x01 <= sid <= 0x0A and not (sid == 0x04 and nrc == 0x22):
+            self.note(f"{who} NRC 0x{nrc:02X} to {sid:02X}: legacy services answer with data "
+                      "or not at all")  # fmt: skip
+        elif sid in (0x14, 0x19, 0x22) and nrc == NRC_LENGTH:
+            self.note(f"{who} NRC 0x13 to {sid:02X} (J1979-2: never)")
+        elif sid == 0x22 and nrc == NRC_BUSY:
+            self.note(f"{who} NRC 0x21 to 22 (J1979-2: never)")
 
     def _permanent(self, e: Exception) -> bool:
         """An open error no retry fixes: a missing driver, SocketCAN off Linux, a bad
@@ -221,7 +301,7 @@ class Vehicle:
     def reopen(self, extended: bool, bitrate: int | None) -> None:
         """Hold `busy`. Change addressing, and bitrate where the adapter takes one."""
         assert isinstance(self.link, CanLink)
-        self.protocol = None
+        self.protocol, self.advertised = None, {}
         if bitrate is not None and bitrate != self.link.bitrate:
             self.link.close()
             self.link.link["bitrate"] = bitrate

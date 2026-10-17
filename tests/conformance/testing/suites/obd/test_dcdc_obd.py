@@ -7,7 +7,8 @@ sends them; responses come from 0x7E8. The contract is nodes/dcdc/src/uds.c.
 
 Tests marked `node` need the DC-DC itself (its DCDC_Status frames); those
 that inject a fault play the BMS and fall silent, so they skip where a BMS
-is on the bus. ISO 15765-4 padding is the tester's choice: 0x00 here.
+is on the bus. An ECUReset ends an operation cycle, the DC-DC's driving
+cycle. ISO 15765-4 padding is the tester's choice: 0x00 here.
 
     cd testing && uv run pytest suites/obd --channel can0
 """
@@ -19,9 +20,8 @@ import time
 import can
 import isotp
 import pytest
-from udsoncan import Response
-from udsoncan.services import ReadDTCInformation
 
+from zelos_testing import frames
 from zelos_testing.dcdc import LIMITS, LIMITS_PERIOD_S, STATUS, BmsLimits
 from zelos_testing.frames import Periodic, bound, collect, count, play_unless_present, until
 from zelos_testing.uds import FUNCTIONAL, PHYSICAL, RESPONSE
@@ -34,6 +34,9 @@ VIN, CALID, ECU_NAME = 0xF190, b"DCDC-1.0.0", b"DCDC"
 U0111 = 0xC111
 U0111_UDS = 0xC11100
 EMISSIONS = 0x33
+# ISO 14229-1 Annex D status bits, and the severity class J1979-2 testers ask for.
+PDTC, CDTC, TNCTOC, WIR = 0x04, 0x08, 0x40, 0x80
+SEVERITY = 0x02
 # Snapshot record 0x01, in order: voltage f32 V, current i16 0.1 A, temperature i8, uptime u32 ms, pack u16 0.1 V.
 SNAPSHOT = struct.Struct(">H f H h H b H I H H")
 
@@ -95,11 +98,19 @@ class ScanTool:
         return rsp
 
     def wwh_dtcs(self, subfunction: int, *args: int) -> dict[int, int]:
-        """ReadDTCInformation 0x42 or 0x55, as udsoncan reads it: 3-byte DTC to status."""
+        """ReadDTCInformation 0x42 (severity, DTC, status) or 0x55 (DTC, status): 3-byte DTC to status."""
         rsp = self.uds(bytes([0x19, subfunction, EMISSIONS, *args]))
-        data = ReadDTCInformation.interpret_response(Response.from_payload(rsp), subfunction).service_data
-        assert data.functional_group_id == EMISSIONS and data.dtc_format == 0x04
-        return {d.id: d.status.get_byte_as_int() for d in data.dtcs}
+        header = bytes([0x59, subfunction, EMISSIONS, 0xFF, *([SEVERITY] if subfunction == 0x42 else []), 0x04])
+        assert rsp[: len(header)] == header, rsp.hex()
+        size = 5 if subfunction == 0x42 else 4
+        records = [rsp[i : i + size] for i in range(len(header), len(rsp), size)]
+        assert all(len(r) == size and (size == 4 or r[0] == SEVERITY) for r in records), rsp.hex()
+        return {int.from_bytes(r[-4:-1], "big"): r[-1] for r in records}
+
+    def reset(self):
+        """ECUReset: the end of an operation cycle. Waits until the responder answers again."""
+        assert self.uds(b"\x11\x01") == b"\x51\x01"
+        wait_until(lambda: self.request(b"\x01\x00", timeout_s=bound(0.2)) is not None, 5.0, step_s=0)
 
 
 @pytest.fixture
@@ -125,8 +136,7 @@ node = pytest.mark.usefixtures("dcdc_node")
 @pytest.fixture
 def no_bms(bus):
     """No BMS on the bus: the suite plays it, and stops it. Skips if a real one is there."""
-    seen = until(bus, lambda f: f[-1].arbitration_id == LIMITS.frame_id or count(f, STATUS.frame_id) >= 20)
-    if seen[-1].arbitration_id == LIMITS.frame_id:
+    if collect(bus, bound(5 * LIMITS_PERIOD_S), ids=[LIMITS.frame_id]):
         pytest.skip("a BMS is on the bus: the suite cannot stop what it sends")
 
 
@@ -148,19 +158,51 @@ def bms(bus) -> Periodic:
 
 def failing(scan) -> set[int]:
     """DTCs whose test is failing right now (testFailed)."""
-    rsp = scan.uds(b"\x19\x02\x01")
-    return {int.from_bytes(rsp[i : i + 3], "big") for i in range(3, len(rsp), 4)}
+    return set(scan.wwh_dtcs(0x42, 0x01, SEVERITY))
+
+
+@pytest.fixture
+def kept_over_resets():
+    """Cycles end with ECUReset, whose DTC memory survives it. Not under Renode: its reset reloads the ELF, zeroing RAM."""
+    if frames.SIMULATED:
+        pytest.skip("Renode zeroes RAM on a reset: every reset there is a power loss")
+
+
+def ran_this_cycle(scan, dtc: int) -> bool:
+    """The DTC's test has run in this operation cycle (testNotCompletedThisOperationCycle clear)."""
+    return dtc not in scan.wwh_dtcs(0x42, TNCTOC, SEVERITY)
+
+
+def lose_bms(bus, scan):
+    """U0111 pending: the suite plays the BMS, clears, then falls silent; the first failing cycle."""
+    with bms(bus):
+        wait_until(lambda: U0111_UDS not in failing(scan), 2.0)
+        assert scan.request(b"\x04") == b"\x44"
+        wait_until(lambda: ran_this_cycle(scan, U0111_UDS), 2.0)
+    wait_until(lambda: U0111 in scan.dtcs(0x07), 2.0)
+
+
+def release_permanent(bus, scan):
+    """No permanent U0111 left by an earlier test: a clear, then one passing cycle."""
+    with bms(bus):
+        wait_until(lambda: U0111_UDS not in failing(scan), 2.0)
+        assert scan.request(b"\x04") == b"\x44"
+        wait_until(lambda: ran_this_cycle(scan, U0111_UDS), 2.0)
+        scan.reset()
+    assert U0111 not in scan.dtcs(0x0A)
+
+
+def confirm_lost_bms(bus, scan):
+    """U0111 confirmed: lost in two operation cycles in a row."""
+    lose_bms(bus, scan)
+    scan.reset()
+    wait_until(lambda: U0111 in scan.dtcs(0x03), 2.0)
 
 
 @contextlib.contextmanager
 def bms_lost(bus, scan):
-    """U0111 confirmed: the suite plays the BMS, clears, then falls silent. Heals on exit."""
-    with bms(bus):
-        cycles(bus, 4)
-        assert scan.request(b"\x04") == b"\x44"
-        cycles(bus, 2)
-        assert U0111 not in scan.dtcs(0x03)
-    wait_until(lambda: U0111 in scan.dtcs(0x03), 2.0)
+    """U0111 pending while inside. Plays the BMS on exit, until its test passes."""
+    lose_bms(bus, scan)
     try:
         yield
     finally:
@@ -227,35 +269,66 @@ def test_pids_follow_the_node(scan, bus):
 
 @node
 def test_mil_off_and_no_dtcs_after_a_clear(scan, bus):
+    """CCR 1968.2 (g)(4.10.1), (g)(4.1.1)(B): a clear turns the MIL off; comprehensive components read complete."""
     with play_unless_present(bus, LIMITS.frame_id, BmsLimits(aux=20.0), LIMITS_PERIOD_S, lambda f: count(f, STATUS.frame_id) >= 20):
         cycles(bus, 4)
         assert scan.request(b"\x04") == b"\x44"
         cycles(bus, 2)
-        assert scan.pid(0x01) == bytes(4)  # MIL off, 0 DTCs, no monitors supported
+        assert scan.pid(0x01) == b"\x00\x04\x00\x00"  # MIL off, 0 DTCs, components supported and complete
         assert scan.dtcs(0x03) == [] and scan.dtcs(0x07) == []
-        assert scan.uds(b"\x22\xf5\x01") == b"\x62\xf5\x01" + bytes(4)
+        assert scan.uds(b"\x22\xf5\x01") == b"\x62\xf5\x01\x00\x04\x00\x00"
 
 
 # --- Faults -----------------------------------------------------------------------
 
 
-@node
-def test_a_lost_bms_is_pending_then_confirmed_and_lights_the_mil(scan, bus, no_bms):
-    with bms_lost(bus, scan):
-        assert U0111 in scan.dtcs(0x07) and U0111 in scan.dtcs(0x03)
-        assert scan.pid(0x01) == b"\x81\x00\x00\x00"  # MIL on, one confirmed DTC
-        assert scan.uds(b"\x22\xf5\x01")[3:] == b"\x81\x00\x00\x00"
-        # J1979-2: the same DTCs, 3 bytes with their status, by confirmed and by pending mask.
-        confirmed, pending = scan.wwh_dtcs(0x42, 0x08, 0xFF), scan.wwh_dtcs(0x42, 0x04, 0xFF)
-        assert {d >> 8 for d in confirmed} == set(scan.dtcs(0x03))
-        assert {d >> 8 for d in pending} == set(scan.dtcs(0x07))
-        assert confirmed[U0111_UDS] & 0x0C == 0x0C
-        # No monitors: the readiness group answers with no DTCs.
-        assert scan.uds(b"\x19\x56\x33\x01") == b"\x59\x56\x33\xff\x04\x01"
+def test_a_fault_is_pending_in_its_first_cycle_and_confirmed_in_its_second(scan, bus, no_bms, kept_over_resets):
+    """CCR 1968.2 (d)(2.2.1)-(2.2.2), (d)(2.2.5): pending first; confirmed, MIL on and permanent the next failing cycle."""
+    release_permanent(bus, scan)
+    lose_bms(bus, scan)
+    assert U0111 not in scan.dtcs(0x03) and U0111 not in scan.dtcs(0x0A)
+    assert scan.pid(0x01)[0] == 0x00  # MIL off, nothing confirmed
+    assert scan.wwh_dtcs(0x42, PDTC, SEVERITY)[U0111_UDS] & (PDTC | CDTC | WIR) == PDTC
+    scan.reset()
+    wait_until(lambda: U0111 in scan.dtcs(0x03), 2.0)
+    assert U0111 in scan.dtcs(0x07) and U0111 in scan.dtcs(0x0A)  # pending stays while failing, (g)(4.4.5)(B)
+    assert scan.pid(0x01)[0] == 0x81 and scan.uds(b"\x22\xf5\x01")[3] == 0x81  # MIL on, one confirmed
+    status = scan.wwh_dtcs(0x42, CDTC, SEVERITY)[U0111_UDS]
+    assert status & (PDTC | CDTC | WIR) == PDTC | CDTC | WIR
+    assert scan.wwh_dtcs(0x55) == {U0111_UDS: status}  # 4-byte DTCAndStatus records
+
+
+def test_the_mil_goes_off_after_three_passing_cycles_and_the_code_stays_confirmed(scan, bus, no_bms, kept_over_resets):
+    """CCR 1968.2 (d)(2.3.2), (d)(2.4), (d)(2.5.1): MIL off after three passing cycles; confirmed stays; permanent goes with the MIL."""
+    confirm_lost_bms(bus, scan)
+    with bms(bus):
+        for passed in range(4):  # the confirming cycle, then three that pass
+            assert scan.pid(0x01)[0] == 0x81, f"after {passed} passing cycles"
+            wait_until(lambda: ran_this_cycle(scan, U0111_UDS), 2.0)
+            scan.reset()
+        wait_until(lambda: ran_this_cycle(scan, U0111_UDS), 2.0)
+        assert scan.pid(0x01)[0] == 0x01  # MIL off, still one confirmed
+        assert U0111 in scan.dtcs(0x03) and scan.dtcs(0x07) == [] and scan.dtcs(0x0A) == []
+
+
+def test_a_permanent_code_survives_a_clear_and_goes_after_one_passing_cycle(scan, bus, no_bms, kept_over_resets):
+    """CCR 1968.2 (g)(4.4.6)(C), (d)(2.5.2)(A): no clear erases a permanent code; one passing cycle after it does."""
+    confirm_lost_bms(bus, scan)
+    with bms(bus):
+        wait_until(lambda: U0111_UDS not in failing(scan), 2.0)
+        assert scan.request(b"\x04") == b"\x44"
+        assert scan.dtcs(0x03) == [] and scan.dtcs(0x07) == [] and scan.pid(0x01)[0] == 0x00
+        assert U0111 in scan.dtcs(0x0A) and U0111_UDS in scan.wwh_dtcs(0x55)
+        assert scan.uds(b"\x14\xff\xff\x33") == b"\x54"
+        assert U0111 in scan.dtcs(0x0A)
+        wait_until(lambda: ran_this_cycle(scan, U0111_UDS), 2.0)
+        scan.reset()
+        assert scan.dtcs(0x0A) == []
 
 
 @node
-def test_freeze_frame_is_the_first_failures_snapshot(scan, bus, no_bms):
+def test_freeze_frame_is_stored_with_the_pending_code(scan, bus, no_bms):
+    """CCR 1968.2 (d)(2.2.7)(A)-(B), (g)(4.3.1): frame 0 is the first failure's; J1979-2 has it as record 0x00."""
     with bms_lost(bus, scan):
         assert supported(scan.pid(0x00, service=0x02), 0x00) >= {0x02, 0x1F}
         assert scan.pid(0x02, service=0x02) == U0111.to_bytes(2, "big")
@@ -264,21 +337,10 @@ def test_freeze_frame_is_the_first_failures_snapshot(scan, bus, no_bms):
         assert scan.pid(0x46, service=0x02)[0] == celsius + 40
         assert int.from_bytes(scan.pid(0x1F, service=0x02), "big") == min(uptime_ms // 1000, 0xFFFF)
         assert scan.pid(0x5B, service=0x02) == (b"\x00" if pack_01v == 0xFFFF else scan.pid(0x5B, service=0x02))
-
-
-@node
-def test_permanent_dtc_survives_a_clear(scan, bus, no_bms):
-    with bms_lost(bus, scan):
-        pass
-    # Healed: still confirmed and permanent. Cleared: only permanent, until it passes three cycles.
-    assert U0111 in scan.dtcs(0x03) and U0111 in scan.dtcs(0x0A)
-    assert scan.request(b"\x04") == b"\x44"
-    assert scan.dtcs(0x03) == [] and scan.dtcs(0x07) == []
-    assert scan.pid(0x01) == bytes(4)
-    assert U0111 in scan.dtcs(0x0A)
-    assert U0111_UDS in scan.wwh_dtcs(0x55)
-    assert scan.uds(b"\x14\xff\xff\x33") == b"\x54"
-    assert U0111 in scan.dtcs(0x0A)
+        # J1979-2: the same frame, PIDs as DIDs 0xF400 + PID.
+        first = scan.uds(b"\x19\x04\xc1\x11\x00\x00")
+        frame = b"".join(b"\xf4" + bytes([p]) + scan.pid(p, service=0x02) for p in (0x1F, 0x42, 0x46, 0x5B))
+        assert first[6:] == b"\x00\x04" + frame
 
 
 # --- Vehicle information -----------------------------------------------------------
@@ -296,6 +358,38 @@ def test_vehicle_information(scan):
     assert scan.uds(b"\x22\xf8\x02\xf8\x06") == b"\x62\xf8\x02" + vin + b"\xf8\x06" + cvn[3:]
     assert scan.uds(b"\x22\xf8\x04")[3:] == CALID.ljust(16, b"\x00")
     assert scan.uds(b"\x22\xf8\x0a")[3:] == ECU_NAME.ljust(20, b"\x00")
+
+
+def test_mixed_availability_and_data_pids_get_no_response(scan):
+    """SWS_Dcm_00943, SWS_Dcm_00972: a request mixing availability and data ids is ignored."""
+    for request in (b"\x01\x00\x1c", b"\x02\x00\x00\x02\x00", b"\x09\x00\x02"):
+        assert scan.request(request, timeout_s=bound(0.3)) is None, request.hex()
+        assert scan.request(request, functional=False, timeout_s=bound(0.3)) is None, request.hex()
+
+
+def test_obd_on_uds_protocol_identification(scan):
+    """ISO 15765-4:2021 6.1.1: an OBDonUDS ECU answers 22 F810 with 0x01 (J1979-2)."""
+    assert scan.request(b"\x22\xf8\x10") == b"\x62\xf8\x10\x01"
+    assert scan.uds(b"\x22\xf8\x10") == b"\x62\xf8\x10\x01"
+
+
+def test_several_dids_answer_those_supported(scan):
+    """ISO 14229-1 (SWS_Dcm_00438): a multi-DID read answers the supported subset; 0x31 only if none is."""
+    assert scan.uds(b"\x22\xf4\x1c\xf4\x0c") == b"\x62\xf4\x1c\x01"
+    assert scan.request(b"\x22\xf4\x0c\xf4\x60", functional=False) == b"\x7f\x22\x31"
+    assert scan.request(b"\x22\xf4\x0c\xf4\x60", timeout_s=bound(0.3)) is None
+
+
+def test_malformed_obd_requests_get_no_negative_response(scan):
+    """CCR 1968.2 (g)(3.4.2)(A): an OBDonUDS request is never answered NRC 0x13."""
+    for request in (b"\x22\xf4\x1c\xf4", b"\x19\x42\x33\x08", b"\x14\xff\xff\x33\x00"):
+        assert scan.request(request, functional=False, timeout_s=bound(0.3)) is None, request.hex()
+
+
+def test_a_readiness_group_without_dtcs_is_out_of_range(scan):
+    """SWS_Dcm_01612: 19 56 of a group no DTC belongs to is NRC 0x31, and nothing functionally."""
+    assert scan.request(b"\x19\x56\x33\x01", functional=False) == b"\x7f\x19\x31"
+    assert scan.request(b"\x19\x56\x33\x01", timeout_s=bound(0.3)) is None
 
 
 def test_obd_on_uds_mirrors_the_legacy_services(scan):

@@ -26,6 +26,7 @@ share/python-wheels/
 *.egg
 MANIFEST
 !tests/conformance/MANIFEST
+!tests/fixtures/obd/MANIFEST
 pip-wheel-metadata/
 extension.egg-info/
 *.tar.gz
@@ -53,6 +54,7 @@ htmlcov/
 
 # Logs and temp files
 *.log
+!tests/fixtures/obd/*.log
 *.tmp
 *.swp
 *.swo

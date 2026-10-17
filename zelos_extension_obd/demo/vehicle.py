@@ -1,15 +1,19 @@
 """Demo vehicle: OBD-II responders in Python, on any python-can bus.
 
-A port of the bench firmware's responder (zelos-examples `lib/uds/core/obd.c`, the
-DC-DC's PID table in `nodes/dcdc/src/uds.c`): legacy services 01/02/03/04/07/09/0A
-that answer nothing to what they do not support, and J1979-2 DIDs F4xx/F5xx/F8xx,
-19 42/55/56 and 14 FFFF33 on the same DTC memory. Two profiles: `dcdc` is the
-firmware's contract; `engine` adds spark-ignition readiness monitors and engine PIDs,
-so readiness and a clear's effect on it can be seen.
+A port of the bench firmware's responder (zelos-examples `lib/uds/core/obd.c` and
+`uds_core.c`'s DTC lifecycle, the DC-DC's PID table in `nodes/dcdc/src/uds.c`): legacy
+services 01/02/03/04/07/09/0A that answer nothing to what they do not support, J1979-2
+DIDs F4xx/F5xx/F8xx and F810, 19 42/55/56/04 and 14 FFFF33 on the same DTC memory, and
+ECUReset, which ends an operation cycle as the firmware's reboot does. Two profiles:
+`dcdc` is the firmware's contract; `engine` adds spark-ignition readiness monitors,
+engine PIDs, PID 41, test results (06) and in-use performance ratios (09 08), so
+readiness, a clear's effect on it and drive cycles can be seen.
 
-Default: three responders on the in-process zelos-can virtual bus, 0x7E8 engine,
-0x7E9 DC-DC, 0x7EA DC-DC with its BMS lost (an active fault that returns after a
-clear); 29-bit 0x18DAF110.. with `extended`. Not a product feature.
+Default: three responders on the in-process zelos-can virtual bus, 0x7E8 engine (the
+one that reports the VIN), 0x7E9 DC-DC, 0x7EA DC-DC with its BMS lost (an active
+fault, confirmed in the cycle before power-on, that returns after a clear); 29-bit
+0x18DAF110.. with `extended`. A DC-DC whose BMS is `None` watches BMS_Limits on the
+bus as the firmware does. Not a product feature.
 """
 
 from __future__ import annotations
@@ -34,17 +38,34 @@ VIN = b"1ZLSDCDC0BENCH001"
 #: ISO 14229-1 Annex D status bits.
 TF, TFTOC, PDTC, CDTC, TNCSLC, TFSLC, TNCTOC, WIR = (1 << n for n in range(8))
 CLEARED = TNCSLC | TNCTOC
+#: The firmware's Kconfig defaults: CCR 1968.2 (d)(2.2.2), (d)(2.3.2), (d)(2.4).
+CONFIRM_CYCLES, HEALING_CYCLES, AGING_CYCLES = 2, 3, 40
 MIL = 0x80
-PID_MONITOR_STATUS, PID_FREEZE_DTC, PID_OBD_STANDARD = 0x01, 0x02, 0x1C
+#: PID 01 byte B: comprehensive components supported, complete.
+CCM_SUPPORTED = 0x04
+PID_MONITOR_STATUS, PID_FREEZE_DTC, PID_OBD_STANDARD, PID_MONITOR_CYCLE = 0x01, 0x02, 0x1C, 0x41
 OBD_STANDARD_CARB = 0x01
-INFO_VIN, INFO_CALID, INFO_CVN, INFO_ECU_NAME = 0x02, 0x04, 0x06, 0x0A
-INFOTYPES = (INFO_VIN, INFO_CALID, INFO_CVN, INFO_ECU_NAME)
+INFO_VIN, INFO_CALID, INFO_CVN, INFO_IUPR, INFO_ECU_NAME = 0x02, 0x04, 0x06, 0x08, 0x0A
 DID_VIN, DID_PIDS, DID_MONITOR, DID_MIL_COUNT, DID_INFO = 0xF190, 0xF400, 0xF500, 0xF501, 0xF800
+#: ISO 15765-4:2021 6.1.1: OBDonUDS protocol identification, 0x01 J1979-2.
+DID_PROTOCOL, PROTOCOL_J1979_2 = 0xF810, 0x01
 EMISSIONS, ALL = 0xFFFF33, 0xFFFFFF
 GROUP_EMISSIONS, FORMAT_J2012_DA_04 = 0x33, 0x04
+#: Severity class 1 (GTR A), what testers ask with mask 0x02. Convention.
+SEVERITY = 0x02
+#: J1979-2 snapshot records: first frame, second (latest) frame.
+RECORD_FIRST, RECORD_LATEST, RECORD_ALL = 0x00, 0xF0, 0xFF
 NRC_SERVICE, NRC_SUBFUNCTION, NRC_LENGTH, NRC_RANGE = 0x11, 0x12, 0x13, 0x31
 #: ISO 14229-1 7.5: never sent in answer to a functional request.
 FUNCTIONAL_SILENT = {0x11, 0x12, 0x31, 0x7E, 0x7F}
+#: Legacy request limits on CAN: 6 PIDs or availability ids, 3 freeze frame pairs.
+MAX_IDS, MAX_FRAME_PAIRS = 6, 3
+#: BMS_Limits (bench.dbc), and the DC-DC's timeout: five of its 100 ms periods.
+BMS_LIMITS_ID, BMS_TIMEOUT_S = 0x201, 0.5
+#: The engine's non-continuous monitors complete this long into a cycle.
+MONITOR_RUN_S = 2.0
+#: Per cycle, as the engine's driving-cycle model counts it.
+CYCLE_KM = 15.0
 
 
 def _u16(value: float) -> bytes:
@@ -55,17 +76,90 @@ def _u8(value: float) -> bytes:
     return bytes([max(0, min(0xFF, round(value)))])
 
 
+def _is_bitmap(id_: int) -> bool:
+    return id_ & 0x1F == 0
+
+
+def _mixed(ids: bytes) -> bool:
+    """Availability and data ids in one request: ignored (SWS_Dcm_00943/00972)."""
+    bitmaps = sum(_is_bitmap(i) for i in ids)
+    return 0 < bitmaps < len(ids)
+
+
 @dataclass
 class Dtc:
-    """One DTC's memory. `clear` keeps `permanent`, as 04 and 14 must."""
+    """One DTC's memory and lifecycle, as `uds_core.c` keeps it. `clear` keeps
+    `permanent`, as 04 and 14 must."""
 
     code: int  # 3 bytes, J2012 + failure type
     status: int = CLEARED
     permanent: bool = False
+    #: First frame (records 0x00/0x01, legacy freeze frame) and second (0xF0), PID -> bytes.
     snapshot: dict[int, bytes] | None = None
+    latest: dict[int, bytes] | None = None
+    stored_at: int = 0
+    failed_cycles: int = 0
+    healing: int = 0
+    aging: int = 0
 
     def clear(self) -> None:
-        self.status, self.snapshot = CLEARED, None
+        self.status, self.snapshot, self.latest, self.stored_at = CLEARED, None, None, 0
+        self.failed_cycles = self.healing = self.aging = 0
+
+    def report(self, failed: bool, frame: Callable[[], dict[int, bytes]], seq: int) -> None:
+        """A test result: zelos_uds_core_dtc()."""
+        if not failed:
+            self.status &= ~(TF | TNCTOC | TNCSLC)
+            return
+        first = not self.status & TFTOC
+        if self.snapshot is None:
+            self.snapshot = self.latest = frame()
+            self.stored_at = seq
+        elif first:
+            self.latest = frame()
+        self.status = (self.status | TF | TFTOC | PDTC | TFSLC) & ~(TNCTOC | TNCSLC)
+        self.aging = self.healing = 0
+        if first:
+            self.failed_cycles += 1
+        if self.failed_cycles >= CONFIRM_CYCLES:
+            self.status |= CDTC | WIR
+            self.permanent = True
+
+    def end_cycle(self) -> None:
+        """The end of an operation cycle: start_cycle()."""
+        tested, failed = not self.status & TNCTOC, bool(self.status & TFTOC)
+        if not failed and self.status & (CDTC | WIR) == CDTC:
+            self.aging += 1
+            if self.aging >= AGING_CYCLES:
+                self.status &= ~CDTC
+                self.aging = 0
+                self.snapshot = self.latest = None
+        if tested and not failed:
+            self.status &= ~PDTC
+            self.failed_cycles = 0
+            if not self.status & CDTC:
+                self.snapshot = self.latest = None
+            if not self.status & WIR:
+                self.permanent = False
+            else:
+                self.healing += 1
+                if self.healing >= HEALING_CYCLES:
+                    self.status &= ~WIR
+                    self.healing = 0
+                    self.permanent = False
+        self.status = (self.status & ~TFTOC) | TNCTOC
+
+
+@dataclass
+class TestResult:
+    """One $06 test (OBDMID, TID) and its unit and scaling id: raw value, min, max."""
+
+    mid: int
+    tid: int
+    uasid: int
+    value: int
+    low: int
+    high: int
 
 
 @dataclass
@@ -78,38 +172,73 @@ class Profile:
     pids: dict[int, Callable[[], bytes]]
     frozen: tuple[int, ...]
     dtcs: list[Dtc]
-    #: PID 01 bytes B-D availability (spark ignition), 0 for none.
-    monitors: tuple[int, int] = (0, 0)
-    complete: bool = True
+    #: PID 01 bytes B-C availability (spark ignition): continuous, non-continuous.
+    monitors: tuple[int, int] = (CCM_SUPPORTED, 0)
     tests: dict[int, Callable[[], bool | None]] = field(default_factory=dict)
+    results: list[TestResult] = field(default_factory=list)
+    #: 09 08 counters (2 bytes each), never cleared ((g)(5.2.1)(B)); empty: unsupported.
+    iupr: list[int] = field(default_factory=list)
 
 
 class Responder:
     """One ECU's OBD-II server: `request` in, the answer out (None: silence)."""
 
-    def __init__(self, profile: str = "dcdc", bms_lost: bool = False, uds_only: bool = False):
-        self.started = time.monotonic()
+    def __init__(
+        self,
+        profile: str = "dcdc",
+        bms_lost: bool | None = False,
+        uds_only: bool = False,
+        vin: bool = True,
+    ) -> None:
+        self.started = self.cycle_started = time.monotonic()
+        #: True/False: fixed; None: from BMS_Limits on the bus (`heard`).
         self.bms_lost = bms_lost
-        self.uds_only = uds_only
+        self.bms_at: float | None = None
+        self.uds_only, self.vin = uds_only, vin
         self.download = bytes(0x10000)
         self.distance_since_clear, self.warmups_since_clear = 1234.0, 42
+        #: Monotonic times: the last clear, the last completed monitor run.
+        self.cleared_at: float | None = None
+        self.ran_at: float | None = self.started
+        self.stored = 0
         self.profile = self._engine() if profile == "engine" else self._dcdc()
         self.lock = threading.Lock()
+        if bms_lost:
+            # Lost in the cycle before power-on too: confirmed in this one.
+            self.sample()
+            self.end_cycle()
+        # Running for a while: this cycle's monitors have completed.
+        self.cycle_started = self.started - MONITOR_RUN_S
 
     # ─── Profiles ──────────────────────────────────────────────────────────
 
     def _uptime(self) -> float:
         return time.monotonic() - self.started
 
+    def heard(self, frame_id: int) -> None:
+        """A frame on the bus; BMS_Limits feeds a DC-DC that watches for it."""
+        if frame_id == BMS_LIMITS_ID:
+            self.bms_at = time.monotonic()
+
+    def _bms(self) -> bool | None:
+        """BMS lost, present, or None while not yet monitored (the firmware's rule)."""
+        if self.bms_lost is not None:
+            return self.bms_lost
+        now = time.monotonic()
+        if self.bms_at is None:
+            return True if self._uptime() > BMS_TIMEOUT_S else None
+        return now - self.bms_at > BMS_TIMEOUT_S
+
     def _dcdc(self) -> Profile:
         """The firmware's DC-DC: 0x1F run time, 0x42 module voltage, 0x46 ambient
-        temperature, 0x5B pack life; no monitors; DTCs P0A94, P0A09, P0A08, U0111."""
+        temperature, 0x5B pack life; comprehensive components only; DTCs P0A94, P0A09,
+        P0A08, U0111."""
 
         def volts() -> float:
             return 13.8 + 0.02 * math.sin(self._uptime())
 
         def pack() -> float | None:
-            return None if self.bms_lost else 374.0
+            return 374.0 if self._bms() is False else None
 
         def life() -> bytes:
             v = pack()
@@ -120,7 +249,7 @@ class Responder:
             0: lambda: False,
             1: lambda: None if pack() is None else pack() < 250,  # type: ignore[operator]
             2: lambda: False,
-            3: lambda: self.bms_lost,
+            3: self._bms,
         }
         pids = {
             0x1F: lambda: _u16(self._uptime()),
@@ -132,9 +261,10 @@ class Responder:
                        tests=tests)  # fmt: skip
 
     def _engine(self) -> Profile:
-        """A spark-ignition engine ECU: P0420 confirmed and permanent (its test passes now),
-        P0171 pending; misfire/fuel/components plus catalyst, EVAP, O2 sensor and heater
-        and EGR monitors, complete until a clear."""
+        """A spark-ignition engine ECU: P0420 confirmed with the MIL on and permanent
+        (its test passes now), P0171 pending; misfire/fuel/components plus catalyst,
+        EVAP, O2 sensor and heater and EGR monitors, complete until a clear and again
+        MONITOR_RUN_S into a later cycle; test results and in-use ratios for them."""
 
         def rpm() -> float:
             return 800 + 400 * (1 + math.sin(self._uptime() / 3))
@@ -151,54 +281,107 @@ class Responder:
             0x2F: lambda: _u8(60 * 255 / 100),
             0x30: lambda: _u8(self.warmups_since_clear),
             0x31: lambda: _u16(self.distance_since_clear),
+            PID_MONITOR_CYCLE: self._monitor_cycle,
             0x42: lambda: _u16(14.1 * 1000),
             0x46: lambda: _u8(22 + 40),
         }
-        p0420 = Dtc(0x042000, CDTC | TFSLC, permanent=True)
-        p0420.snapshot = {0x04: _u8(40 * 255 / 100), 0x05: _u8(88 + 40), 0x0C: _u16(2400 * 4),
-                          0x0D: _u8(72), 0x11: _u8(22 * 255 / 100)}  # fmt: skip
+        p0420 = Dtc(0x042000, CDTC | TFSLC | WIR, permanent=True, stored_at=1)
+        p0420.snapshot = p0420.latest = {
+            0x04: _u8(40 * 255 / 100), 0x05: _u8(88 + 40), 0x0C: _u16(2400 * 4),
+            0x0D: _u8(72), 0x11: _u8(22 * 255 / 100),
+        }  # fmt: skip
         p0171 = Dtc(0x017100, PDTC | TFTOC | TFSLC)
         # Catalyst, EVAP, O2 sensor, O2 heater, EGR (byte C bits 0, 2, 5, 6, 7).
         monitors = (0x07, 0b11100101)
         frozen = (0x04, 0x05, 0x0C, 0x0D, 0x11)
+        # Our own UASID choices (0x0A 0.122 mV, 0x10 ms, 0x17 0.01 kPa, 0x20 1/256,
+        # 0x24 counts); not verified against J1979-DA.
+        results = [
+            TestResult(0x01, 0x01, 0x0A, 3686, 3277, 4096),  # O2 B1S1 rich-lean threshold
+            TestResult(0x21, 0x80, 0x20, 90, 0, 192),  # catalyst B1 oxygen storage ratio
+            TestResult(0x31, 0x80, 0x17, 1250, 500, 3000),  # EGR B1 flow, kPa
+            TestResult(0x3C, 0x80, 0x17, 20, 0, 50),  # EVAP 0.040 in. leak, kPa
+            TestResult(0x41, 0x80, 0x10, 12000, 0, 30000),  # O2 heater B1S1 warm-up, ms
+            TestResult(0xA1, 0x0B, 0x24, 0, 0, 25),  # misfire, EWMA counts
+        ]
+        # OBDCOND, IGNCNTR, then COMP/COND: CAT1, CAT2, O2S1, O2S2, EGR, AIR, EVAP,
+        # SO2S1, SO2S2 (spark ignition, 20 counters). One bank: bank 2 and AIR zero.
+        iupr = [120, 300, 50, 120, 0, 0, 60, 120, 0, 0, 40, 120, 0, 0, 30, 120, 55, 120, 0, 0]
         return Profile("engine", b"ECM-ENGINE", b"ENG-4.2.0", pids, frozen, [p0420, p0171],
-                       monitors=monitors)  # fmt: skip
+                       monitors=monitors, results=results, iupr=iupr)  # fmt: skip
 
     # ─── Model ─────────────────────────────────────────────────────────────
 
     def _mil(self) -> bool:
-        return any(d.status & CDTC for d in self.profile.dtcs)
+        return any(d.status & WIR for d in self.profile.dtcs)
+
+    def _frame(self) -> dict[int, bytes]:
+        return {p: self.profile.pids[p]() for p in self.profile.frozen}
 
     def sample(self) -> None:
-        """One test cycle: a failing test confirms its DTC (and makes it permanent) at once,
-        as the firmware's does; a passing one clears testFailed."""
+        """One test cycle: each test's result, as the firmware reports it every 50 ms."""
         with self.lock:
             for i, test in self.profile.tests.items():
                 failed = test()
-                if failed is None:
-                    continue
-                d = self.profile.dtcs[i]
-                if not failed:
-                    d.status &= ~(TF | TNCTOC | TNCSLC | WIR)
-                    continue
-                if not d.status & TFSLC:
-                    d.snapshot = {p: self.profile.pids[p]() for p in self.profile.frozen}
-                d.status = (d.status | TF | TFTOC | PDTC | CDTC | TFSLC | WIR) & ~(TNCTOC | TNCSLC)
-                d.permanent = True
+                if failed is not None:
+                    self._report(i, failed)
+
+    def _report(self, i: int, failed: bool) -> None:
+        d = self.profile.dtcs[i]
+        if failed and d.snapshot is None:
+            self.stored += 1
+        d.report(failed, self._frame, self.stored)
+
+    def end_cycle(self) -> None:
+        """End an operation cycle and start the next (the firmware's reboot): the DTC
+        lifecycle, and the engine's driving-cycle counters and ratios."""
+        now = time.monotonic()
+        ran = now - self.cycle_started >= MONITOR_RUN_S
+        for d in self.profile.dtcs:
+            d.end_cycle()
+        self.warmups_since_clear = min(self.warmups_since_clear + 1, 0xFF)
+        self.distance_since_clear += CYCLE_KM
+        iupr = self.profile.iupr
+        if iupr:
+            iupr[0], iupr[1] = (
+                min(iupr[0] + 1, 0xFFFF),
+                min(iupr[1] + 1, 0xFFFF),
+            )  # OBDCOND, IGNCNTR
+            for i in range(2, len(iupr), 2):
+                if iupr[i + 1]:  # a supported monitor: one more cycle, and its run
+                    iupr[i], iupr[i + 1] = iupr[i] + ran, iupr[i + 1] + 1
+                    if max(iupr[i], iupr[i + 1]) >= 0xFFFF:  # (g)(5.2): halve both
+                        iupr[i], iupr[i + 1] = iupr[i] // 2, iupr[i + 1] // 2
+        self.ran_at = self._ran(now)
+        self.cycle_started, self.started, self.bms_at = now, now, None
+
+    def _ran(self, now: float) -> float | None:
+        """When the non-continuous monitors last completed: MONITOR_RUN_S into a cycle."""
+        at = self.cycle_started + MONITOR_RUN_S
+        return at if now >= at else self.ran_at
+
+    def _complete(self) -> bool:
+        """Every monitor has completed since the last clear."""
+        ran = self._ran(time.monotonic())
+        return self.cleared_at is None or (ran is not None and ran > self.cleared_at)
 
     def clear(self) -> None:
         for d in self.profile.dtcs:
             d.clear()
-        self.profile.complete = False
+        self.cleared_at = time.monotonic()
         self.distance_since_clear, self.warmups_since_clear = 0.0, 0
 
     # ─── J1979 (lib/uds/core/obd.c) ────────────────────────────────────────
 
     def _supported(self, id_: int, scope: str) -> bool:
-        if scope == "info":
-            return id_ in INFOTYPES
+        if scope in ("info", "uds_info"):
+            # IUPR is per DTC on J1979-2 (19 06 record 0x91): not a DID.
+            return (id_ == INFO_VIN and self.vin) or id_ in (INFO_CALID, INFO_CVN, INFO_ECU_NAME) \
+                or (id_ == INFO_IUPR and bool(self.profile.iupr) and scope == "info")  # fmt: skip
         if scope == "frozen":
             return id_ == PID_FREEZE_DTC or id_ in self.profile.frozen
+        if scope == "tests":
+            return any(r.mid == id_ for r in self.profile.results)
         return id_ in (PID_MONITOR_STATUS, PID_OBD_STANDARD) or id_ in self.profile.pids
 
     def _bitmap(self, base: int, scope: str) -> int:
@@ -210,11 +393,17 @@ class Responder:
         return bits
 
     def _monitor_status(self) -> bytes:
+        """PID 01: MIL (any warningIndicatorRequested), confirmed count, readiness."""
         count = sum(bool(d.status & CDTC) for d in self.profile.dtcs)
-        a = (MIL if count else 0) | min(count, 0x7F)
+        a = (MIL if self._mil() else 0) | min(count, 0x7F)
         b, c = self.profile.monitors
-        d = 0 if self.profile.complete else c
-        return bytes([a, b, c, d])
+        return bytes([a, b, c, 0 if self._complete() else c])
+
+    def _monitor_cycle(self) -> bytes:
+        """PID 41: monitors enabled and complete this drive cycle ((g)(4.2.2)(A))."""
+        b, c = self.profile.monitors
+        done = time.monotonic() - self.cycle_started >= MONITOR_RUN_S
+        return bytes([0, b, c, 0 if done else c])
 
     def _pid(self, pid: int, snapshot: dict[int, bytes] | None = None) -> bytes | None:
         if snapshot is not None:
@@ -227,36 +416,63 @@ class Responder:
         return None if encode is None else encode()
 
     def _info(self, info: int) -> bytes | None:
+        if not self._supported(info, "info"):
+            return None
         if info == INFO_VIN:
             return VIN
         if info == INFO_CVN:
             return zlib.crc32(self.download).to_bytes(4, "big")
         if info == INFO_CALID:
             return self.profile.calid.ljust(16, b"\x00")[:16]
-        if info == INFO_ECU_NAME:
-            return self.profile.ecu_name.ljust(20, b"\x00")[:20]
-        return None
+        if info == INFO_IUPR:
+            return b"".join(v.to_bytes(2, "big") for v in self.profile.iupr)
+        return self.profile.ecu_name.ljust(20, b"\x00")[:20]
+
+    def _nodi(self, info: int) -> int:
+        """Number of data items: 2-byte counters for 09 08, else one."""
+        return len(self.profile.iupr) if info == INFO_IUPR else 1
 
     def _frozen_dtc(self) -> Dtc | None:
-        return next((d for d in self.profile.dtcs if d.status & CDTC and d.snapshot), None)
+        """Freeze frame 0's: the DTC whose frame was stored first ((g)(4.3.1)(D))."""
+        stored = [d for d in self.profile.dtcs if d.snapshot is not None]
+        return min(stored, key=lambda d: d.stored_at) if stored else None
+
+    def _results(self, mid: int) -> bytes:
+        """$06 records MID TID UASID value min max; zero until the monitor completed
+        after a clear ((g)(4.5.4))."""
+        done, out = self._complete(), b""
+        for r in self.profile.results:
+            if r.mid == mid:
+                values = (r.value, r.low, r.high) if done else (0, 0, 0)
+                out += bytes([r.mid, r.tid, r.uasid]) + b"".join(
+                    v.to_bytes(2, "big") for v in values
+                )
+        return out
+
+    def _availability(self, ids: bytes, scope: str) -> bytes:
+        """Up to 6 availability ids: `id bitmap` each, those non-zero (and 00)."""
+        out = b""
+        for id_ in ids:
+            bits = self._bitmap(id_, scope)
+            if bits or id_ == 0:
+                out += bytes([id_]) + bits.to_bytes(4, "big")
+        return out
 
     def _legacy(self, req: bytes) -> bytes | None:
-        sid, out = req[0], bytearray([req[0] + 0x40])
-        if sid == 0x01 and len(req) >= 2:
-            for pid in req[1:]:
-                if pid & 0x1F == 0:
-                    bits = self._bitmap(pid, "live")
-                    if bits or pid == 0:
-                        out += bytes([pid]) + bits.to_bytes(4, "big")
+        sid, args, out = req[0], req[1:], bytearray([req[0] + 0x40])
+        if sid == 0x01 and args and len(args) <= MAX_IDS and not _mixed(args):
+            for pid in args:
+                if _is_bitmap(pid):
+                    out += self._availability(bytes([pid]), "live")
                 elif self._supported(pid, "live"):
                     out += bytes([pid]) + (self._pid(pid) or b"")
-        elif sid == 0x02 and len(req) >= 3:
+        elif sid == 0x02 and args and len(args) % 2 == 0 and len(args) // 2 <= MAX_FRAME_PAIRS \
+                and not _mixed(args[::2]):  # fmt: skip
             dtc = self._frozen_dtc()
-            for i in range(1, len(req) - 1, 2):
-                pid, frame = req[i], req[i + 1]
+            for pid, frame in zip(args[::2], args[1::2], strict=True):
                 if frame != 0:
                     continue
-                if pid & 0x1F == 0:
+                if _is_bitmap(pid):
                     bits = self._bitmap(pid, "frozen")
                     if bits or pid == 0:
                         out += bytes([pid, 0]) + bits.to_bytes(4, "big")
@@ -266,25 +482,24 @@ class Responder:
                     value = self._pid(pid, dtc.snapshot)
                     if value is not None:
                         out += bytes([pid, 0]) + value
-        elif sid in (0x03, 0x07, 0x0A) and len(req) == 1:
+        elif sid in (0x03, 0x07, 0x0A) and not args:
             listed = {0x03: lambda d: d.status & CDTC, 0x07: lambda d: d.status & PDTC,
                       0x0A: lambda d: d.permanent}[sid]  # fmt: skip
             codes = [d.code >> 8 for d in self.profile.dtcs if listed(d)]
             return bytes(out) + bytes([len(codes)]) + b"".join(c.to_bytes(2, "big") for c in codes)
-        elif sid == 0x04 and len(req) == 1:
+        elif sid == 0x04 and not args:
             self.clear()
             return bytes(out)
-        elif sid == 0x09 and len(req) == 2:
-            info = req[1]
-            if info & 0x1F == 0:
-                bits = self._bitmap(info, "info")
-                return (
-                    bytes(out) + bytes([info]) + bits.to_bytes(4, "big")
-                    if bits or info == 0
-                    else None
-                )
-            data = self._info(info)
-            return None if data is None else bytes(out) + bytes([info, 1]) + data
+        elif sid == 0x06 and self.profile.results and args and len(args) <= MAX_IDS:
+            if all(_is_bitmap(m) for m in args):
+                out += self._availability(args, "tests")
+            elif len(args) == 1 and self._supported(args[0], "tests"):
+                out += self._results(args[0])
+        elif sid == 0x09 and args and len(args) <= MAX_IDS:
+            if all(_is_bitmap(i) for i in args):
+                out += self._availability(args, "info")
+            elif len(args) == 1 and (data := self._info(args[0])) is not None:
+                out += bytes([args[0], self._nodi(args[0])]) + data
         return bytes(out) if len(out) > 1 else None
 
     # ─── J1979-2 (OBDonUDS) ────────────────────────────────────────────────
@@ -293,9 +508,11 @@ class Responder:
         base, low = did & 0xFF00, did & 0xFF
         if did == DID_VIN:
             return VIN
+        if did == DID_PROTOCOL:
+            return bytes([PROTOCOL_J1979_2])
         if base in (DID_PIDS, DID_INFO):
-            scope = "live" if base == DID_PIDS else "info"
-            if low & 0x1F == 0:
+            scope = "live" if base == DID_PIDS else "uds_info"
+            if _is_bitmap(low):
                 bits = self._bitmap(low, scope)
                 return bits.to_bytes(4, "big") if bits or low == 0 else None
             if not self._supported(low, scope):
@@ -307,17 +524,30 @@ class Responder:
             return self._monitor_status()
         return None
 
-    def _uds(self, req: bytes) -> bytes:
-        """A positive answer; Nrc for a negative one."""
+    def _frame_record(self, d: Dtc, record: int) -> bytes:
+        """19 04 record 0x00 or 0xF0: DIDs 0xF400 + PID of the frozen PIDs."""
+        frame = (d.snapshot if record == RECORD_FIRST else d.latest) or {}
+        dids = [
+            (DID_PIDS + p).to_bytes(2, "big") + frame[p] for p in self.profile.frozen if p in frame
+        ]
+        return bytes([record, len(dids)]) + b"".join(dids)
+
+    def _uds(self, req: bytes) -> bytes | None:
+        """A positive answer (None: suppressed); Nrc for a negative one."""
         sid = req[0]
+        if sid == 0x11:
+            _need(len(req) >= 2 and req[1] & 0x7F in (0x01, 0x02, 0x03), NRC_SUBFUNCTION)
+            _need(len(req) == 2, NRC_LENGTH)
+            self.end_cycle()  # the firmware reboots: a new operation cycle
+            return None if req[1] & 0x80 else bytes([0x51, req[1]])
         if sid == 0x22:
             _need(len(req) >= 3 and (len(req) - 1) % 2 == 0, NRC_LENGTH)
             out = bytearray(b"\x62")
             for i in range(1, len(req), 2):
-                did = int.from_bytes(req[i : i + 2], "big")
-                value = self._did(did)
-                _need(value is not None, NRC_RANGE)
-                out += req[i : i + 2] + value  # type: ignore[operator]
+                value = self._did(int.from_bytes(req[i : i + 2], "big"))
+                if value is not None:  # ISO 14229-1: those supported, 0x31 if none
+                    out += req[i : i + 2] + value
+            _need(len(out) > 1, NRC_RANGE)
             return bytes(out)
         if sid == 0x14:
             _need(len(req) == 4, NRC_LENGTH)
@@ -327,19 +557,33 @@ class Responder:
         if sid == 0x19:
             _need(len(req) >= 2, NRC_LENGTH)
             kind = req[1]
+            if kind == 0x04:
+                _need(len(req) == 6, NRC_LENGTH)
+                d = next(
+                    (d for d in self.profile.dtcs if d.code == int.from_bytes(req[2:5], "big")),
+                    None,
+                )
+                _need(
+                    d is not None and req[5] in (RECORD_FIRST, RECORD_LATEST, RECORD_ALL), NRC_RANGE
+                )
+                out = bytearray(req[1:5]) + bytes([d.status])  # type: ignore[union-attr]
+                for record in (RECORD_FIRST, RECORD_LATEST):
+                    if d.snapshot is not None and req[5] in (record, RECORD_ALL):  # type: ignore[union-attr]
+                        out += self._frame_record(d, record)  # type: ignore[arg-type]
+                return b"\x59" + bytes(out)
             want = {0x42: 5, 0x55: 3, 0x56: 4}.get(kind)
             _need(want is not None, NRC_SUBFUNCTION)
             _need(len(req) == want, NRC_LENGTH)
-            _need(req[2] == GROUP_EMISSIONS, NRC_RANGE)
+            _need(req[2] == GROUP_EMISSIONS and kind != 0x56, NRC_RANGE)  # no readiness groups
             out = bytearray([0x59, kind, GROUP_EMISSIONS, 0xFF])
             if kind == 0x42:
-                out.append(0x00)  # severity availability: none
+                out.append(SEVERITY)
             out.append(FORMAT_J2012_DA_04)
-            if kind == 0x56:
-                return bytes(out) + req[3:4]  # no monitor in any readiness group
             for d in self.profile.dtcs:
-                if d.permanent if kind == 0x55 else d.status & req[3]:
-                    out += b"\x00" + d.code.to_bytes(3, "big") + bytes([d.status])
+                if kind == 0x55 and d.permanent:
+                    out += d.code.to_bytes(3, "big") + bytes([d.status])
+                elif kind == 0x42 and d.status & req[3] and SEVERITY & req[4]:
+                    out += bytes([SEVERITY]) + d.code.to_bytes(3, "big") + bytes([d.status])
             return bytes(out)
         raise _Nrc(NRC_SERVICE)
 
@@ -355,7 +599,19 @@ class Responder:
             except _Nrc as e:
                 if functional and e.code in FUNCTIONAL_SILENT:
                     return None
+                if e.code == NRC_LENGTH and _obd_request(req):
+                    return None  # CCR 1968.2 (g)(3.4.2)(A): never 0x13
                 return bytes([0x7F, req[0], e.code])
+
+
+def _obd_request(req: bytes) -> bool:
+    """An OBDonUDS request (uds_obd_relevant())."""
+    if req[0] == 0x22:
+        return len(req) >= 2 and (0xF4 <= req[1] <= 0xF8 or req[1] == 0xE0)
+    if req[0] == 0x19 and len(req) >= 2:
+        frames = req[1] == 0x04 and len(req) == 6 and req[5] in (RECORD_FIRST, RECORD_LATEST)
+        return req[1] in (0x42, 0x55, 0x56) or frames
+    return req[0] == 0x14 and len(req) >= 4 and int.from_bytes(req[1:4], "big") == EMISSIONS
 
 
 class _Nrc(Exception):
@@ -379,7 +635,9 @@ def response_id(index: int, extended: bool) -> int:
 
 
 class DemoVehicle:
-    """Responders on one bus: (profile, BMS lost) per responder, `PROFILES` by default."""
+    """Responders on one bus: (profile, BMS lost) per responder, `PROFILES` by default.
+    The first reports the VIN, the others do not ((g)(4.8.1)). BMS lost None: from
+    BMS_Limits on the bus."""
 
     def __init__(
         self,
@@ -394,7 +652,8 @@ class DemoVehicle:
         if bitrate:
             self.link["bitrate"] = bitrate
         self.extended = extended
-        self.responders = [Responder(p, lost, uds_only) for p, lost in profiles]
+        self.responders = [Responder(p, lost, uds_only, vin=i == 0)
+                           for i, (p, lost) in enumerate(profiles)]  # fmt: skip
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._bus: can.BusABC | None = None
@@ -405,7 +664,7 @@ class DemoVehicle:
 
     def start(self) -> DemoVehicle:
         self._bus = diag.open_bus(self.link, "obd-demo-vehicle")
-        self._notifier = can.Notifier(self._bus, [], timeout=0.1)
+        self._notifier = can.Notifier(self._bus, [self._heard], timeout=0.1)
         params = {**diag.isotp_params({"isotp_padding": PADDING}, False), "tx_data_min_length": 8}
         functional = diag.FUNCTIONAL_29 if self.extended else diag.FUNCTIONAL_11
         for i, responder in enumerate(self.responders):
@@ -425,6 +684,11 @@ class DemoVehicle:
                         for i in range(len(self.responders)))  # fmt: skip
         logger.info("Demo OBD-II vehicle on %s: responders %s", diag.bus_text(self.link), ids)
         return self
+
+    def _heard(self, msg: can.Message) -> None:
+        if not msg.is_extended_id:
+            for responder in self.responders:
+                responder.heard(msg.arbitration_id)
 
     def stop(self) -> None:
         """Explicit order: server thread, ISO-TP stacks, notifier, bus."""

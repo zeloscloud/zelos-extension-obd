@@ -54,7 +54,9 @@ class DoipEntity:
         responders: list[Responder] | None = None,
     ) -> None:
         self.host, self.port, self.udp_port = host, port, udp_port
-        self.responders = responders or [Responder(p, lost) for p, lost in PROFILES]
+        self.responders = responders or [
+            Responder(p, lost, vin=i == 0) for i, (p, lost) in enumerate(PROFILES)
+        ]
         self.addresses = {FIRST_ECU + i: r for i, r in enumerate(self.responders)}
         self.diagnostics: list[tuple[int, bytes]] = []  # (target, request) as received
         self._loop: asyncio.AbstractEventLoop | None = None

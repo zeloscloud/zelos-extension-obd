@@ -34,7 +34,7 @@ All configuration is managed through the Zelos App settings interface.
 | **Name** | CAN channel, `demo` or `doip` | Name the actions take as `vehicle`, and the trace segment |
 | **Channel**, **Bitrate**, **Advanced Configuration (JSON)** | as the CAN extension | The adapter. Bitrate 500000 or 250000 where the extension sets it |
 | **Addressing** | `11-bit` | `11-bit` (0x7DF, answers on 0x7E8-0x7EF) or `29-bit` (0x18DB33F1, answers on 0x18DAF1xx). `detect` finds it |
-| **Protocol** | `auto` | `auto`: 01 00, then 22 F400 if nothing answers. `legacy`: J1979. `uds`: J1979-2 |
+| **Protocol** | `auto` | `auto`: 22 F810 (J1979-2 protocol identification), then 01 00. `legacy`: J1979. `uds`: J1979-2 |
 | **Polling** | none | `pids` (catalogue names or hex) and `period_s`, read from the start |
 
 A bus is one vehicle: two entries on one interface and channel are refused. PCAN, Kvaser and Vector open a channel once: this extension and the UDS or CAN extension cannot share one adapter channel.
@@ -77,17 +77,17 @@ A bus is one vehicle: two entries on one interface and channel are refused. PCAN
 
 ## Actions
 
-Available as `OBD/<action>`. Each takes `vehicle`. A result is `responders`: one entry per ECU that answered. No answer at all is `status: error`.
+Available as `OBD/<action>`. Each takes `vehicle`, and those that transmit an optional `ecu` (`7E8`, `18DAF110`, DoIP `1001`): that ECU alone, addressed physically, instead of every ECU (functional). A result is `responders`: one entry per ECU that answered, plus `compliance` when an answer broke a rule a compliant ECU follows (first frame later than P2CAN 50 ms, an NRC where J1979 / J1979-2 allow none, response-pending more than once on J1979-2, a PID its bitmap does not list). No answer at all is `status: error`.
 
 | Action | Service | Description |
 |---|---|---|
 | `list_vehicles`, `get_status` | | Vehicles; state, protocol, responders seen, polling tasks, counters. Send nothing |
-| `detect` | 01 00 / 22 F400 | ISO 15765-4 initialization: 11-bit and 29-bit at 500 then 250 kbit/s, first answered kept. Bitrates only on adapters the extension sets; a wrong bitrate causes error frames on a running bus |
+| `detect` | 22 F810 / 01 00 | ISO 15765-4 initialization: 11-bit and 29-bit at the configured bitrate (500 kbit/s), first answered kept; NRC 0x21 restarts it after 200 ms, 6 times at most. 250 kbit/s only after bus errors at 500 (a wrong bitrate causes error frames on a running bus), and only on adapters the extension sets |
 | `supported_pids` | 01/02/09 00, 20, ... | Bitmap walk per ECU |
-| `read_pids` | 01 / 22 F4xx | Up to 6 PIDs per request (J1979-2: one), decoded with units |
+| `read_pids` | 01 / 22 F4xx | Up to 6 PIDs per request, decoded with units |
 | `monitor_status` | 01 01 / 22 F501 | MIL, DTC count, each supported monitor complete / incomplete, `ready` |
 | `read_dtcs` | 03 07 0A / 19 42 19 55 | Stored, pending, permanent |
-| `freeze_frame` | 02 | Frame 0: its DTC and PIDs (J1979 only) |
+| `freeze_frame` | 02 / 19 42 + 19 04 | Frame 0: its DTC and PIDs. J1979-2: first and latest snapshot (records 00 / F0) of each pending or confirmed DTC, asked of its ECU |
 | `vehicle_info` | 09 02/04/06/0A / 22 F8xx | VIN, CALID, CVN, ECU name |
 | `test_results` | 06 / 22 F6xx | One monitor id, raw |
 | `clear_dtcs` | 04 / 14 FFFF33 | `confirm` off (default): reads 03/07, returns `status: refused`, `would_clear` and the warning; no clear is sent. On: clears every ECU, each one's acknowledgement (NRC 0x22: key on, engine off) |

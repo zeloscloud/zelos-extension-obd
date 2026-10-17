@@ -61,8 +61,8 @@ addopts = "--log-cli-level=INFO"
 [tool.ruff]
 target-version = 'py311'
 line-length = 100
-# Vendored as is from zelos-examples; edited there.
-extend-exclude = ["tests/conformance/testing"]
+# Vendored as is from zelos-examples / the zelos monorepo; edited there.
+extend-exclude = ["tests/conformance/testing", "tests/fixtures/obd/obd_*.py"]
 
 [tool.ruff.lint]
 select = [

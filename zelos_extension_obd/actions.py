@@ -1,9 +1,11 @@
 """`OBD/<name>` actions: one namespace keyed by a `vehicle` parameter.
 
 Every action but `list_vehicles`, `get_status` and the config-form helpers transmits
-on the vehicle's bus. Results are per responder (each ECU that answered), keyed by
-its CAN id or DoIP address as the trace names it. `clear_dtcs` clears only with
-`confirm`; without it, it reports what a clear would erase and sends no clear.
+on the vehicle's bus, functionally (every ECU) or, with `ecu`, physically to one ECU.
+Results are per responder (each ECU that answered), keyed by its CAN id or DoIP address
+as the trace names it, with `compliance` notes when an answer breaks a rule. `clear_dtcs`
+clears only with `confirm`; without it, it reports what a clear would erase and sends no
+clear.
 """
 
 from __future__ import annotations
@@ -50,6 +52,17 @@ def _vehicle_field(func: Any) -> Any:
     return action.select("vehicle", title="Vehicle", choices=_vehicles)(func)
 
 
+def _ecu_field(func: Any) -> Any:
+    return action.text("ecu", title="ECU", required=False, default="",
+                       description="One responder, addressed physically (7E8, 18DAF110, DoIP "
+                       "1001). Empty: every ECU (functional)")(func)  # fmt: skip
+
+
+def _target(vehicle: str, ecu: str) -> tuple[Vehicle, int | None]:
+    v = _get(vehicle)
+    return v, v.parse_ecu(ecu)
+
+
 def guarded(func: Callable[..., dict[str, Any]]) -> Callable[..., dict[str, Any]]:
     """Errors as `{status: error, error}`: a down or busy link, no answer, bad input."""
 
@@ -91,16 +104,19 @@ def get_status(vehicle: str) -> dict[str, Any]:
 
 @action(
     "Detect",
-    "Transmits. ISO 15765-4 initialization: request 01 00 (then 22 F400 for J1979-2) on "
-    "11-bit and 29-bit at 500 then 250 kbit/s, keeping the first that answers. Bitrates "
-    "are tried only on adapters the extension sets the bitrate of; a wrong bitrate on a "
-    "running bus causes error frames until the next variant.",
+    "Transmits. ISO 15765-4 initialization: request 22 F810 (J1979-2), then 01 00, on "
+    "11-bit and 29-bit at the configured bitrate (500 kbit/s by default), keeping the first "
+    "that answers; busy answers (NRC 0x21) restart it after 200 ms, 6 times at most. The "
+    "other bitrate (250 kbit/s) is tried only after bus errors at the first, and only on "
+    "adapters the extension sets the bitrate of: a wrong bitrate on a running bus causes "
+    "error frames.",
     timeout=DETECT_TIMEOUT,
 )
 @_vehicle_field
+@_ecu_field
 @guarded
-def detect(vehicle: str) -> dict[str, Any]:
-    return scan.detect(_get(vehicle))
+def detect(vehicle: str, ecu: str = "") -> dict[str, Any]:
+    return scan.detect(*_target(vehicle, ecu))
 
 
 @action(
@@ -111,24 +127,30 @@ def detect(vehicle: str) -> dict[str, Any]:
 @_vehicle_field
 @action.select("service", title="Service", choices=list(SERVICES), default="Current data (01)",
                required=False)  # fmt: skip
+@_ecu_field
 @guarded
-def supported_pids(vehicle: str, service: str = "Current data (01)") -> dict[str, Any]:
+def supported_pids(
+    vehicle: str, service: str = "Current data (01)", ecu: str = ""
+) -> dict[str, Any]:
     if service not in SERVICES:
         raise ValueError(f"service: one of {list(SERVICES)}")
-    return scan.supported_pids(_get(vehicle), SERVICES[service])
+    v, target = _target(vehicle, ecu)
+    return scan.supported_pids(v, SERVICES[service], target)
 
 
 @action(
     "Read PIDs",
-    "Transmits. Current data (01) of every ECU that supports the PIDs, decoded with units; "
-    "up to 6 PIDs per request (one per request on J1979-2).",
+    "Transmits. Current data (01; J1979-2: 22 F4xx) of every ECU that supports the PIDs, "
+    "decoded with units; up to 6 PIDs per request.",
 )
 @_vehicle_field
 @action.text("pids", title="PIDs", description="Catalogue names or hex, comma separated",
              placeholder="EngineRPM, VehicleSpeed, 05")  # fmt: skip
+@_ecu_field
 @guarded
-def read_pids(vehicle: str, pids: str) -> dict[str, Any]:
-    return scan.read_pids(_get(vehicle), scan.parse_pids(pids))
+def read_pids(vehicle: str, pids: str, ecu: str = "") -> dict[str, Any]:
+    v, target = _target(vehicle, ecu)
+    return scan.read_pids(v, scan.parse_pids(pids), ecu=target)
 
 
 @action(
@@ -137,9 +159,10 @@ def read_pids(vehicle: str, pids: str) -> dict[str, Any]:
     "per ECU (01 01; J1979-2: 22 F501, MIL and count).",
 )
 @_vehicle_field
+@_ecu_field
 @guarded
-def monitor_status(vehicle: str) -> dict[str, Any]:
-    return scan.monitor_status(_get(vehicle))
+def monitor_status(vehicle: str, ecu: str = "") -> dict[str, Any]:
+    return scan.monitor_status(*_target(vehicle, ecu))
 
 
 @action(
@@ -148,19 +171,23 @@ def monitor_status(vehicle: str) -> dict[str, Any]:
     "with status masks 08 and 04, and 19 55, with each DTC's status).",
 )
 @_vehicle_field
+@_ecu_field
 @guarded
-def read_dtcs(vehicle: str) -> dict[str, Any]:
-    return scan.read_dtcs(_get(vehicle))
+def read_dtcs(vehicle: str, ecu: str = "") -> dict[str, Any]:
+    return scan.read_dtcs(*_target(vehicle, ecu))
 
 
 @action(
     "Freeze Frame",
-    "Transmits. Freeze frame 0 (02) per ECU: the DTC that stored it and the PIDs it holds.",
+    "Transmits. Freeze frame 0 (02) per ECU: the DTC that stored it and the PIDs it holds. "
+    "J1979-2: the first and latest snapshot (19 04 records 00 / F0) of each pending or "
+    "confirmed DTC, asked of the ECU that reports it.",
 )
 @_vehicle_field
+@_ecu_field
 @guarded
-def freeze_frame(vehicle: str) -> dict[str, Any]:
-    return scan.freeze_frame(_get(vehicle))
+def freeze_frame(vehicle: str, ecu: str = "") -> dict[str, Any]:
+    return scan.freeze_frame(*_target(vehicle, ecu))
 
 
 @action(
@@ -169,14 +196,17 @@ def freeze_frame(vehicle: str) -> dict[str, Any]:
     "(09 02/04/06/0A; J1979-2: 22 F802/F804/F806/F80A).",
 )
 @_vehicle_field
+@_ecu_field
 @guarded
-def vehicle_info(vehicle: str) -> dict[str, Any]:
-    return scan.vehicle_info(_get(vehicle))
+def vehicle_info(vehicle: str, ecu: str = "") -> dict[str, Any]:
+    return scan.vehicle_info(*_target(vehicle, ecu))
 
 
 @action(
     "Clear DTCs",
-    "Writes to every emissions ECU (04; J1979-2: 14 FFFF33). " + scan.CLEAR_WARNING + " "
+    "Writes to every emissions ECU, or the one ECU given (04; J1979-2: 14 FFFF33). "
+    + scan.CLEAR_WARNING
+    + " "
     "Without Confirm: reads what would be erased (03, 07) and clears nothing.",
 )
 @_vehicle_field
@@ -188,9 +218,11 @@ def vehicle_info(vehicle: str) -> dict[str, Any]:
     widget="toggle",
     required=False,
 )
+@_ecu_field
 @guarded
-def clear_dtcs(vehicle: str, confirm: bool = False) -> dict[str, Any]:
-    return scan.clear_dtcs(_get(vehicle), bool(confirm))
+def clear_dtcs(vehicle: str, confirm: bool = False, ecu: str = "") -> dict[str, Any]:
+    v, target = _target(vehicle, ecu)
+    return scan.clear_dtcs(v, bool(confirm), target)
 
 
 @action(
@@ -200,15 +232,17 @@ def clear_dtcs(vehicle: str, confirm: bool = False) -> dict[str, Any]:
 )
 @_vehicle_field
 @action.text("mid", title="Monitor ID (hex)", default="00", required=False)
+@_ecu_field
 @guarded
-def test_results(vehicle: str, mid: str = "00") -> dict[str, Any]:
+def test_results(vehicle: str, mid: str = "00", ecu: str = "") -> dict[str, Any]:
     try:
         number = int(str(mid), 16)
     except ValueError:
         raise ValueError(f"monitor id {mid!r} is not hex") from None
     if not 0 <= number <= 0xFF:
         raise ValueError("monitor id: 00 to FF")
-    return scan.test_results(_get(vehicle), number)
+    v, target = _target(vehicle, ecu)
+    return scan.test_results(v, number, target)
 
 
 @action(
@@ -221,9 +255,11 @@ def test_results(vehicle: str, mid: str = "00") -> dict[str, Any]:
              placeholder="EngineRPM, VehicleSpeed")  # fmt: skip
 @action.number("period_s", title="Period (s)", minimum=0.05, maximum=3600, default=1.0,
                required=False)  # fmt: skip
+@_ecu_field
 @guarded
-def start_polling(vehicle: str, pids: str, period_s: float = 1.0) -> dict[str, Any]:
-    return scan.start_polling(_get(vehicle), scan.parse_pids(pids), float(period_s))
+def start_polling(vehicle: str, pids: str, period_s: float = 1.0, ecu: str = "") -> dict[str, Any]:
+    v, target = _target(vehicle, ecu)
+    return scan.start_polling(v, scan.parse_pids(pids), float(period_s), target)
 
 
 @action("Stop Polling", "Stop a polling task by its task_id (from start_polling).")

@@ -57,7 +57,7 @@
               "uds"
             ],
             "default": "auto",
-            "description": "auto: ask 01 00, and 22 F400 if nothing answers. legacy: SAE J1979 services 01-0A. uds: SAE J1979-2 (OBDonUDS, MY2027+ US light duty)."
+            "description": "auto: ask 22 F810 (J1979-2), then 01 00. legacy: SAE J1979 services 01-0A. uds: SAE J1979-2 (OBDonUDS, MY2027+ US light duty)."
           },
           "polling": {
             "type": "object",
@@ -197,7 +197,7 @@
                   "bitrate": {
                     "type": "integer",
                     "title": "Bitrate (bps)",
-                    "description": "ISO 15765-4 bitrates: 500 kbit/s (legislated) or 250 kbit/s. Detect tries both.",
+                    "description": "ISO 15765-4 bitrates: 500 kbit/s (legislated) or 250 kbit/s. Detect tries this one, the other only after bus errors.",
                     "enum": [
                       500000,
                       250000
@@ -231,7 +231,7 @@
                   "bitrate": {
                     "type": "integer",
                     "title": "Bitrate (bps)",
-                    "description": "ISO 15765-4 bitrates: 500 kbit/s (legislated) or 250 kbit/s. Detect tries both.",
+                    "description": "ISO 15765-4 bitrates: 500 kbit/s (legislated) or 250 kbit/s. Detect tries this one, the other only after bus errors.",
                     "enum": [
                       500000,
                       250000
@@ -265,7 +265,7 @@
                   "bitrate": {
                     "type": "integer",
                     "title": "Bitrate (bps)",
-                    "description": "ISO 15765-4 bitrates: 500 kbit/s (legislated) or 250 kbit/s. Detect tries both.",
+                    "description": "ISO 15765-4 bitrates: 500 kbit/s (legislated) or 250 kbit/s. Detect tries this one, the other only after bus errors.",
                     "enum": [
                       500000,
                       250000
@@ -299,7 +299,7 @@
                   "bitrate": {
                     "type": "integer",
                     "title": "Bitrate (bps)",
-                    "description": "ISO 15765-4 bitrates: 500 kbit/s (legislated) or 250 kbit/s. Detect tries both.",
+                    "description": "ISO 15765-4 bitrates: 500 kbit/s (legislated) or 250 kbit/s. Detect tries this one, the other only after bus errors.",
                     "enum": [
                       500000,
                       250000

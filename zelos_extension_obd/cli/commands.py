@@ -43,7 +43,9 @@ def _options(func: Callable[..., Any]) -> Callable[..., Any]:
         click.option("--addressing", type=click.Choice(ADDRESSING), default="11-bit",
                      show_default=True),
         click.option("--protocol", type=click.Choice(PROTOCOLS), default="auto", show_default=True,
-                     help="auto: 01 00, then 22 F400 (J1979-2)"),
+                     help="auto: 22 F810 (J1979-2), then 01 00"),
+        click.option("--ecu", default="", help="One responder, addressed physically: 7E8, "
+                     "18DAF110, DoIP 1001 (default: every ECU, functional)"),
         click.option("--config-json", default=None, help="other: python-can bus kwargs, JSON"),
         click.option("--remote-host", default=None, help="zelos-ssh-socketcan: SSH host"),
         click.option("--ssh-user", default=None, help="zelos-ssh-socketcan: SSH user"),
@@ -97,9 +99,11 @@ def command(func: Callable[..., dict[str, Any]]) -> Callable[..., None]:
     @functools.wraps(func)
     def run(**kwargs: Any) -> None:
         advanced = {**ADVANCED_DEFAULTS, "p2_timeout": kwargs.pop("p2")}
+        ecu = kwargs.pop("ecu")
         settings = _settings(kwargs)
         try:
             with cli_vehicle(settings, advanced) as vehicle:
+                kwargs["ecu"] = vehicle.parse_ecu(ecu)
                 result = actions.guarded(func)(vehicle, **kwargs)
         except (ValueError, ConnectionError) as e:
             result = {"status": "error", "error": str(e)}
@@ -112,77 +116,78 @@ def command(func: Callable[..., dict[str, Any]]) -> Callable[..., None]:
 
 @click.command()
 @command
-def detect(vehicle) -> dict:
-    """Transmits. ISO 15765-4 initialization: 01 00 on 11/29-bit at 500k then 250k.
+def detect(vehicle, ecu) -> dict:
+    """Transmits. ISO 15765-4 initialization: 22 F810, then 01 00, on 11/29-bit at the
+    configured bitrate (500k); 250k only after bus errors.
 
     \b
     Example:
         main.py detect --interface pcan --channel PCAN_USBBUS1
     """
-    return scan.detect(vehicle)
+    return scan.detect(vehicle, ecu)
 
 
 @click.command()
 @click.option("--service", type=click.Choice(["01", "02", "09"]), default="01", show_default=True)
 @command
-def pids(vehicle, service: str) -> dict:
+def pids(vehicle, service: str, ecu) -> dict:
     """Transmits. Supported PIDs (or freeze frame PIDs, infotypes) per ECU."""
-    return scan.supported_pids(vehicle, int(service, 16))
+    return scan.supported_pids(vehicle, int(service, 16), ecu)
 
 
 @click.command()
 @click.option("--pids", "names", required=True, help="Names or hex, comma separated")
 @command
-def read(vehicle, names: str) -> dict:
+def read(vehicle, names: str, ecu) -> dict:
     """Transmits. Current data of the PIDs, decoded.
 
     \b
     Example:
         main.py read --interface demo --pids EngineRPM,VehicleSpeed,05
     """
-    return scan.read_pids(vehicle, scan.parse_pids(names))
+    return scan.read_pids(vehicle, scan.parse_pids(names), ecu=ecu)
 
 
 @click.command()
 @command
-def status(vehicle) -> dict:
+def status(vehicle, ecu) -> dict:
     """Transmits. MIL, DTC count and readiness monitors per ECU."""
-    return scan.monitor_status(vehicle)
+    return scan.monitor_status(vehicle, ecu)
 
 
 @click.command()
 @command
-def dtcs(vehicle) -> dict:
+def dtcs(vehicle, ecu) -> dict:
     """Transmits. Stored, pending and permanent DTCs per ECU."""
-    return scan.read_dtcs(vehicle)
+    return scan.read_dtcs(vehicle, ecu)
 
 
 @click.command()
 @command
-def freeze(vehicle) -> dict:
-    """Transmits. Freeze frame 0 per ECU."""
-    return scan.freeze_frame(vehicle)
+def freeze(vehicle, ecu) -> dict:
+    """Transmits. Freeze frame 0 per ECU (J1979-2: snapshot records 00 / F0 per DTC)."""
+    return scan.freeze_frame(vehicle, ecu)
 
 
 @click.command()
 @command
-def info(vehicle) -> dict:
+def info(vehicle, ecu) -> dict:
     """Transmits. VIN, CALID, CVN and ECU name per ECU."""
-    return scan.vehicle_info(vehicle)
+    return scan.vehicle_info(vehicle, ecu)
 
 
 @click.command()
 @click.option("--mid", default="00", show_default=True, help="Monitor id, hex")
 @command
-def tests(vehicle, mid: str) -> dict:
+def tests(vehicle, mid: str, ecu) -> dict:
     """Transmits. On-board monitoring test results (06), raw."""
-    return scan.test_results(vehicle, int(mid, 16))
+    return scan.test_results(vehicle, int(mid, 16), ecu)
 
 
 @click.command()
 @click.option("--yes", is_flag=True, help="Clear for real; without it nothing is cleared")
 @command
-def clear(vehicle, yes: bool) -> dict:
+def clear(vehicle, yes: bool, ecu) -> dict:
     """Clear DTCs, freeze frames and readiness on every ECU (04 / 14 FFFF33).
 
     Without --yes: lists what would be cleared and clears nothing (status refused,
@@ -193,7 +198,7 @@ def clear(vehicle, yes: bool) -> dict:
         main.py clear --interface demo           # dry run
         main.py clear --interface demo --yes
     """
-    return scan.clear_dtcs(vehicle, yes)
+    return scan.clear_dtcs(vehicle, yes, ecu)
 
 
 @click.command("demo-ecu")

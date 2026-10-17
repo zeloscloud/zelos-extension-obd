@@ -60,41 +60,58 @@ def car(request):
     demo.stop()
 
 
+# The demo answers 22 F810, so auto reads it as J1979-2 (ISO 15765-4:2021 6.1.1).
+WIRE = {
+    "auto": ["0322F810CCCCCCCC", "0522F40CF442CCCC"],
+    "legacy": ["020100CCCCCCCCCC", "03010C42CCCCCCCC"],
+}
+
+
+@pytest.mark.parametrize(
+    "car", [({}, {"protocol": p}) for p in WIRE], indirect=True, ids=list(WIRE)
+)
 def test_a_functional_request_is_one_padded_single_frame_and_every_ecu_answers(car):
     vehicle, sniffer = car
     result = scan.read_pids(vehicle, scan.parse_pids("EngineRPM, 42"))
     sent = [m for m in sniffer.frames if m.arbitration_id == 0x7DF]
     # The protocol probe, then the read: ISO 15765-4 frames, DLC 8, padding 0xCC.
-    assert [bytes(m.data) for m in sent] == [
-        bytes.fromhex("020100CCCCCCCCCC"),
-        bytes.fromhex("0301 0C42 CCCCCCCC".replace(" ", "")),
-    ]
+    protocol = vehicle.configured_protocol
+    assert [bytes(m.data).hex().upper() for m in sent] == WIRE[protocol]
     assert all(m.dlc == 8 and not m.is_extended_id for m in sent)
     assert set(result["responders"]) == {"07e8", "07e9", "07ea"}
     assert set(result["responders"]["07e8"]["values"]) == {"EngineRPM", "ControlModuleVoltage"}
+    # 07e9 has no PID 0C: a multi-PID read is answered with the supported subset.
     assert set(result["responders"]["07e9"]["values"]) == {"ControlModuleVoltage"}
     assert result["units"]["EngineRPM"] == "rpm"
 
 
+@pytest.mark.parametrize(
+    "car", [({}, {"protocol": p}) for p in WIRE], indirect=True, ids=list(WIRE)
+)
 def test_clear_without_confirm_sends_no_clear(car):
     vehicle, sniffer = car
+    p0420, p0171, u0111 = (c + ("-00" if vehicle.configured_protocol == "auto" else "")
+                           for c in ("P0420", "P0171", "U0111"))  # fmt: skip
     refused = scan.clear_dtcs(vehicle, confirm=False)
     assert refused["status"] == "refused"
-    assert refused["would_clear"]["07e8"] == {"stored": ["P0420"], "pending": ["P0171"]}
+    assert refused["would_clear"]["07e8"] == {"stored": [p0420], "pending": [p0171]}
     requests = [bytes(m.data[1:2]) for m in sniffer.frames if m.arbitration_id == 0x7DF]
     assert b"\x04" not in requests and b"\x14" not in requests
-    assert scan.read_dtcs(vehicle)["responders"]["07e8"]["stored"] == ["P0420"]
+    assert scan.read_dtcs(vehicle)["responders"]["07e8"]["stored"] == [p0420]
 
     cleared = scan.clear_dtcs(vehicle, confirm=True)
     assert {r: v["cleared"] for r, v in cleared["responders"].items()} == {
         "07e8": True, "07e9": True, "07ea": True,
     }  # fmt: skip
     engine = scan.monitor_status(vehicle)["responders"]["07e8"]
-    assert engine["mil"] is False and engine["ready"] is False
-    assert engine["monitors"]["Catalyst"] == "incomplete"
+    assert engine["mil"] is False and engine["dtc_count"] == 0
+    if vehicle.configured_protocol == "legacy":  # J1979-2 F501: MIL and count only
+        assert engine["ready"] is False and engine["monitors"]["Catalyst"] == "incomplete"
     dtcs = scan.read_dtcs(vehicle)["responders"]
-    assert dtcs["07e8"] == {"stored": [], "pending": [], "permanent": ["P0420"]}
-    assert dtcs["07ea"]["stored"] == ["U0111"]  # an active fault returns
+    kinds = {k: dtcs["07e8"][k] for k in ("stored", "pending", "permanent")}
+    assert kinds == {"stored": [], "pending": [], "permanent": [p0420]}
+    # An active fault returns, pending until a second cycle confirms it (CCR (d)(2.2.2)).
+    assert dtcs["07ea"]["stored"] == [] and dtcs["07ea"]["pending"] == [u0111]
 
 
 @pytest.mark.parametrize(
@@ -104,20 +121,42 @@ def test_29_bit_obd_on_uds_is_probed_and_reassembles_per_ecu(car):
     vehicle, sniffer = car
     info = scan.vehicle_info(vehicle)
     assert info["protocol"] == "uds"
-    assert {r: v["vin"] for r, v in info["responders"].items()} == dict.fromkeys(
-        ("18daf110", "18daf111", "18daf112"), "1ZLSDCDC0BENCH001"
-    )
+    # One ECU per vehicle reports the VIN (CCR (g)(4.8.1)); every one its CALID.
+    assert {r: v.get("vin") for r, v in info["responders"].items()} == {
+        "18daf110": "1ZLSDCDC0BENCH001", "18daf111": None, "18daf112": None,
+    }  # fmt: skip
     flow = [m for m in sniffer.frames if m.arbitration_id == 0x18DA10F1]
     assert flow and all(m.data[0] >> 4 == 3 and m.dlc == 8 for m in flow)  # our flow control
     dtcs = scan.read_dtcs(vehicle)["responders"]["18daf110"]
     assert dtcs["stored"] == ["P0420-00"] and dtcs["status"]["P0171-00"] == "0x26"
 
 
+def test_ecu_is_addressed_physically(car):
+    vehicle, sniffer = car
+    result = scan.read_pids(vehicle, [0x42], ecu=0x7E9)
+    assert set(result["responders"]) == {"07e9"}
+    assert {m.arbitration_id for m in sniffer.frames if m.arbitration_id < 0x7E8} == {0x7E1}
+
+
+def test_detect_does_not_fall_back_to_250k_on_silence(monkeypatch):
+    """ISO 15765-4:2005 4.1-4.2: the next bitrate only after a bus error, never on silence."""
+    config = json.dumps({"interface": "virtual", "channel": f"obd-e2e-{next(_channels)}"})
+    vehicle = _open(Vehicle("car", Interface.OTHER, {"config_json": config},
+                            dict(ADVANCED_DEFAULTS)))  # fmt: skip
+    monkeypatch.setattr(vehicle, "can_set_bitrate", lambda: True)
+    try:
+        with pytest.raises(scan.NoAnswer, match="250000 was not tried"):
+            scan.detect(vehicle)
+    finally:
+        vehicle.stop()
+        vehicle.join(3)
+
+
 @pytest.mark.parametrize("car", [({"extended": True}, {})], indirect=True)
 def test_detect_finds_29_bit(car):
     vehicle, _ = car
     found = scan.detect(vehicle)
-    assert (found["addressing"], found["protocol"]) == ("29-bit", "legacy")
+    assert (found["addressing"], found["protocol"]) == ("29-bit", "uds")
     assert [t["answered"] for t in found["tried"]] == [False, True]
     assert vehicle.status()["functional_id"] == "0x18DB33F1"
 
@@ -141,9 +180,9 @@ def test_over_doip_every_ecu_answers_from_its_address():
         vehicle = _open(Vehicle("car", Interface.DOIP, settings, dict(ADVANCED_DEFAULTS)))
         try:
             dtcs = scan.read_dtcs(vehicle)["responders"]
-            assert dtcs["1001"]["stored"] == ["P0420"] and dtcs["1003"]["stored"] == ["U0111"]
+            assert dtcs["1001"]["stored"] == ["P0420-00"] and dtcs["1003"]["stored"] == ["U0111-00"]
             assert scan.clear_dtcs(vehicle, confirm=False)["status"] == "refused"
-            assert all(data[0] != 0x04 for _, data in entity.diagnostics)
+            assert all(data[0] not in (0x04, 0x14) for _, data in entity.diagnostics)
             assert all(target == 0xE400 for target, _ in entity.diagnostics)
         finally:
             vehicle.stop()
