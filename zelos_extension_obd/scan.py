@@ -27,6 +27,8 @@ LEGACY, UDS = "legacy", "uds"
 #: PIDs per request: J1979 allows 6 on CAN; J1979-2 up to 6 DIDs per $22 (convention), a
 #: server answering the subset it supports (ISO 14229-1).
 MAX_PIDS = {LEGACY: 6, UDS: 6}
+#: A functional request on CAN is one single frame (7 bytes): 22 and 3 DIDs.
+FUNCTIONAL_DIDS = 3
 #: J1979-2 DID bases: DID = base + PID / OBDMID / infotype.
 DID_PIDS, DID_MONITOR, DID_TESTS, DID_INFO = 0xF400, 0xF500, 0xF600, 0xF800
 DID_MIL_COUNT = 0xF501
@@ -353,11 +355,13 @@ def supported_pids(vehicle: Vehicle, service: int = 0x01, ecu: int | None = None
 def read_pids(
     vehicle: Vehicle, pids: list[int], op: str = "read_pids", ecu: int | None = None
 ) -> dict[str, Any]:
-    """Current data (01 PIDs or 22 F4xx DIDs, up to 6 per request)."""
+    """Current data (01 PIDs or 22 F4xx DIDs, up to 6 per request; 3 functional on CAN)."""
     with vehicle.busy(op, ecu):
         protocol = ensure(vehicle)
         per: dict[int, dict[str, Any]] = {}
         step = MAX_PIDS[protocol]
+        if protocol == UDS and vehicle.target is None and isinstance(vehicle.link, CanLink):
+            step = FUNCTIONAL_DIDS
         for i in range(0, len(pids), step):
             chunk = pids[i : i + step]
             if protocol == UDS:

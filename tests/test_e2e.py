@@ -85,6 +85,15 @@ def test_a_functional_request_is_one_padded_single_frame_and_every_ecu_answers(c
     assert result["units"]["EngineRPM"] == "rpm"
 
 
+def test_a_functional_j1979_2_read_is_split_into_single_frames(car):
+    """A functional $22 on CAN is one single frame: 3 DIDs at most."""
+    vehicle, sniffer = car
+    result = scan.read_pids(vehicle, scan.parse_pids("0C, 0D, 05, 42"))
+    sent = [bytes(m.data).hex().upper() for m in sniffer.frames if m.arbitration_id == 0x7DF]
+    assert sent[1:] == ["0722F40CF40DF405", "0322F442CCCCCCCC"]
+    assert len(result["responders"]["07e8"]["values"]) == 4
+
+
 @pytest.mark.parametrize(
     "car", [({}, {"protocol": p}) for p in WIRE], indirect=True, ids=list(WIRE)
 )
