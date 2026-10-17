@@ -147,6 +147,24 @@ def test_ecu_is_addressed_physically(car):
     assert {m.arbitration_id for m in sniffer.frames if m.arbitration_id < 0x7E8} == {0x7E1}
 
 
+def test_no_flow_control_without_our_request():
+    """A first frame to another tester (ours outstanding: none) gets no flow control from us."""
+    channel = f"obd-e2e-{next(_channels)}"
+    sniffer = Sniffer(channel)
+    config = json.dumps({"interface": "virtual", "channel": channel})
+    vehicle = _open(Vehicle("car", Interface.OTHER, {"config_json": config},
+                            dict(ADVANCED_DEFAULTS)))  # fmt: skip
+    try:
+        first_frame = bytes([0x10, 0x14, 0x49, 0x02, 0x01, 0x31, 0x32, 0x33])
+        sniffer.bus.send(can.Message(arbitration_id=0x7E8, is_extended_id=False, data=first_frame))
+        time.sleep(0.3)
+        assert sniffer.frames == []
+    finally:
+        vehicle.stop()
+        vehicle.join(3)
+        sniffer.close()
+
+
 def test_detect_does_not_fall_back_to_250k_on_silence(monkeypatch):
     """ISO 15765-4:2005 4.1-4.2: the next bitrate only after a bus error, never on silence."""
     config = json.dumps({"interface": "virtual", "channel": f"obd-e2e-{next(_channels)}"})
