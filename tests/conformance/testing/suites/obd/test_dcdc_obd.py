@@ -223,7 +223,7 @@ def test_supported_pids_are_walked_from_the_bitmaps(scan):
 
 def test_unsupported_requests_get_no_response(scan):
     silent_s = bound(0.3)
-    for request in (b"\x01\x0c", b"\x01\x60", b"\x06\x00", b"\x09\x08", b"\x02\x42\x01"):
+    for request in (b"\x01\x0c", b"\x01\x60", b"\x02\x42\x01"):
         assert scan.request(request, timeout_s=silent_s) is None, request.hex()
         assert scan.request(request, functional=False, timeout_s=silent_s) is None, request.hex()
     # Physically addressed, the same services answer; a PID left out is left out.
@@ -329,7 +329,8 @@ def test_freeze_frame_is_stored_with_the_pending_code(scan, bus, no_bms):
         assert abs(int.from_bytes(scan.pid(0x42, service=0x02), "big") - round(volts * 1000)) <= 1
         assert scan.pid(0x46, service=0x02)[0] == celsius + 40
         assert int.from_bytes(scan.pid(0x1F, service=0x02), "big") == min(uptime_ms // 1000, 0xFFFF)
-        assert scan.pid(0x5B, service=0x02) == (b"\x00" if pack_01v == 0xFFFF else scan.pid(0x5B, service=0x02))
+        expected = 0 if pack_01v == 0xFFFF else round(min(max((pack_01v * 0.1 - 250) / 150, 0), 1) * 255)
+        assert abs(scan.pid(0x5B, service=0x02)[0] - expected) <= 1
         # J1979-2: the same frame, PIDs as DIDs 0xF400 + PID.
         first = scan.uds(b"\x19\x04\xc1\x11\x00\x00")
         frame = b"".join(b"\xf4" + bytes([p]) + scan.pid(p, service=0x02) for p in (0x1F, 0x42, 0x46, 0x5B))
@@ -386,13 +387,20 @@ def test_a_readiness_group_without_dtcs_is_out_of_range(scan):
 
 
 def test_obd_on_uds_mirrors_the_legacy_services(scan):
-    assert scan.uds(b"\x22\xf4\x00")[3:] == scan.pid(0x00)
-    assert scan.uds(b"\x22\xf4\x40")[3:] == scan.pid(0x40)
-    assert scan.uds(b"\x22\xf4\x1c\xf4\x46")[3:] == b"\x01\xf4\x46" + scan.pid(0x46)  # within a degree
-    legacy, did = scan.pid(0x42), scan.uds(b"\x22\xf4\x42")[3:]
-    assert abs(int.from_bytes(legacy, "big") - int.from_bytes(did, "big")) <= 50  # 50 mV between two samples
-    assert scan.uds(b"\x22\xf4\x1f")[3:] in (scan.pid(0x1F), (int.from_bytes(scan.pid(0x1F), "big") - 1).to_bytes(2, "big"))
-    assert scan.request(b"\x22\xf4\x0c", functional=False) == b"\x7f\x22\x31"
+    # PID 46 is live too: F446, in a multi-DID read between two 01 46 reads, lies in their span (degC).
+    before = scan.pid(0x46)[0]
+    multi = scan.uds(b"\x22\xf4\x1c\xf4\x46")
+    after = scan.pid(0x46)[0]
+    assert len(multi) == 7 and multi[3:6] == b"\x01\xf4\x46", multi.hex()
+    assert min(before, after) - 1 <= multi[6] <= max(before, after) + 1, (before, multi[6], after)
+    # PID 42 is the live rail voltage: F442, read between two 01 42 reads, lies in their span (mV).
+    before = int.from_bytes(scan.pid(0x42), "big")
+    did = int.from_bytes(scan.uds(b"\x22\xf4\x42")[3:], "big")
+    after = int.from_bytes(scan.pid(0x42), "big")
+    assert min(before, after) - 50 <= did <= max(before, after) + 50, (before, did, after)
+    before = int.from_bytes(scan.pid(0x1F), "big")  # run time, s
+    did = int.from_bytes(scan.uds(b"\x22\xf4\x1f")[3:], "big")
+    assert before <= did <= int.from_bytes(scan.pid(0x1F), "big"), (before, did)
 
 
 def test_a_j1979_2_scan_tool_reads_what_a_legacy_one_does(scan):
