@@ -105,7 +105,7 @@ class Vehicle:
                 link["interface"] = str(interface)
             _check_config_json(interface, link.get("config_json"))
             if interface in BITRATE_INTERFACES:
-                link.setdefault("bitrate", 500000)
+                link.setdefault("bitrate", BITRATES[0])
             self.link = CanLink(link, name, advanced)
             self.link.extended = self.addressing == "29-bit"
         self.trace: Trace | None = None

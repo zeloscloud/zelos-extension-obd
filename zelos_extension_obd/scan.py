@@ -19,6 +19,7 @@ from udsoncan import Response
 from zelos_can import isotp as diag
 from zelos_can import obd
 
+from zelos_extension_obd.constants import BITRATES
 from zelos_extension_obd.link import CanLink
 from zelos_extension_obd.trace import units
 from zelos_extension_obd.vehicle import Unavailable, Vehicle
@@ -26,9 +27,9 @@ from zelos_extension_obd.vehicle import Unavailable, Vehicle
 logger = logging.getLogger(__name__)
 
 LEGACY, UDS = "legacy", "uds"
-#: PIDs per request: J1979 allows 6 on CAN; J1979-2 up to 6 DIDs per $22 (convention), a
-#: server answering the subset it supports (ISO 14229-1).
-MAX_PIDS = {LEGACY: 6, UDS: 6}
+#: PIDs per request, both protocols: J1979 allows 6 on CAN; J1979-2 up to 6 DIDs per $22
+#: (convention), a server answering the subset it supports (ISO 14229-1).
+MAX_PIDS = 6
 #: A functional request on CAN is one single frame (7 bytes): 22 and 3 DIDs.
 FUNCTIONAL_DIDS = 3
 #: J1979-2 DID bases: DID = base + PID / OBDMID / infotype.
@@ -281,8 +282,8 @@ def detect(vehicle: Vehicle, ecu: int | None = None) -> dict[str, Any]:
         configured = (link.extended, link.bitrate)
         rates: list[int | None] = [None]
         if vehicle.can_set_bitrate():
-            first = link.bitrate or 500000
-            rates = [first, 250000 if first == 500000 else 500000]
+            first = link.bitrate or BITRATES[0]
+            rates = [first, BITRATES[1] if first == BITRATES[0] else BITRATES[0]]
         tried: list[dict[str, Any]] = []
         try:
             for rate in rates:
@@ -396,7 +397,7 @@ def read_pids(
     with vehicle.busy(op, ecu):
         protocol = ensure(vehicle)
         per: dict[int, dict[str, Any]] = {}
-        step = MAX_PIDS[protocol]
+        step = MAX_PIDS
         if protocol == UDS and vehicle.target is None and isinstance(vehicle.link, CanLink):
             step = FUNCTIONAL_DIDS
         for i in range(0, len(pids), step):
@@ -759,7 +760,8 @@ def clear_dtcs(vehicle: Vehicle, confirm: bool, ecu: int | None = None) -> dict[
 
 
 class Poll:
-    """`read_pids` every `period` s, traced; a beat that finds the vehicle busy is skipped."""
+    """`read_pids` every `period` s, traced. A beat waits for a request in progress up to
+    `LOCK_TIMEOUT` s, and is skipped if the vehicle is still busy or not connected."""
 
     def __init__(
         self, vehicle: Vehicle, pids: list[int], period: float, ecu: int | None = None

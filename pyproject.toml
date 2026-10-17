@@ -24,7 +24,7 @@ dependencies = [
     # `zelos_can.doip` (extra `diag`) and the PID catalogue `zelos_can.obd`.
     # TODO floor: the first zelos-can release with `zelos_can.isotp`, `zelos_can.doip` and `zelos_can.obd`.
     "zelos-can[python-can,diag]>=0.0.11a5",
-    # J1979-2 (OBDonUDS) ReadDTCInformation parsing.
+    # NRC names in results.
     "udsoncan>=1.21.0",
 ]
 
