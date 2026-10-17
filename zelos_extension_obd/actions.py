@@ -222,7 +222,7 @@ def vehicle_info(vehicle: str, ecu: str = "") -> dict[str, Any]:
 @guarded
 def clear_dtcs(vehicle: str, confirm: bool = False, ecu: str = "") -> dict[str, Any]:
     v, target = _target(vehicle, ecu)
-    return scan.clear_dtcs(v, bool(confirm), target)
+    return scan.clear_dtcs(v, confirm is True, target)  # a real True only
 
 
 @action(

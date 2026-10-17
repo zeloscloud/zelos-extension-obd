@@ -123,6 +123,17 @@ def test_clear_without_confirm_sends_no_clear(car):
     assert dtcs["07ea"]["stored"] == [] and dtcs["07ea"]["pending"] == [u0111]
 
 
+def test_physical_clear_needs_a_real_true(car, monkeypatch):
+    """Only confirm True clears: a truthy non-boolean is a dry run, to one ECU too."""
+    from zelos_extension_obd import actions
+
+    vehicle, sniffer = car
+    monkeypatch.setitem(actions.VEHICLES, "car", vehicle)
+    assert actions.clear_dtcs(vehicle="car", confirm="true", ecu="7E8")["status"] == "refused"
+    sent = [bytes(m.data[1:2]) for m in sniffer.frames if m.arbitration_id == 0x7E0]
+    assert sent and b"\x04" not in sent and b"\x14" not in sent
+
+
 @pytest.mark.parametrize(
     "car", [({"extended": True, "uds_only": True}, {"addressing": "29-bit"})], indirect=True
 )
