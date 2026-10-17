@@ -266,8 +266,8 @@ def vehicle_info(body: bytes) -> dict | None:
 
 # ─── Monitoring: $06 / $19 06 0x92, $09 08 / 0B / $19 06 0x91 ─────────────────
 
-# UASID: (signed, scale, unit), the ones the vectors use (J1979-DA via J1699-3 /
-# python-OBD; values only).
+# UASID: (signed, scale, unit), the ones the vectors use (the public J1979-DA
+# UAS tables).
 UAS = {
     0x0A: (False, 0.122, "mV"),
     0x10: (False, 1, "ms"),
