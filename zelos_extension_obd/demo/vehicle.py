@@ -2,12 +2,13 @@
 
 A port of the bench firmware's responder (zelos-examples `lib/uds/core/obd.c` and
 `uds_core.c`'s DTC lifecycle, the DC-DC's PID table in `nodes/dcdc/src/uds.c`): legacy
-services 01/02/03/04/07/09/0A that answer nothing to what they do not support, J1979-2
-DIDs F4xx/F5xx/F8xx and F810, 19 42/55/56/04 and 14 FFFF33 on the same DTC memory, and
-ECUReset, which ends an operation cycle as the firmware's reboot does. Two profiles:
+services 01/02/03/04/06/07/09/0A that answer nothing to what they do not support, J1979-2
+DIDs F4xx/F5xx/F8xx and F810, 19 42/55/56/04/06/1A and 14 FFFF33 on the same DTC memory,
+and ECUReset, which ends an operation cycle as the firmware's reboot does. Two profiles:
 `dcdc` is the firmware's contract; `engine` adds spark-ignition readiness monitors,
-engine PIDs, PID 41, test results (06) and in-use performance ratios (09 08), so
-readiness, a clear's effect on it and drive cycles can be seen.
+engine PIDs, PID 41, test results (06; J1979-2 19 06 record 0x92 per DTC) and in-use
+performance ratios (09 08; 19 06 record 0x91 per DTC, F808), so readiness, a clear's
+effect on it and drive cycles can be seen the same way on both protocols.
 
 Default: three responders on the in-process zelos-can virtual bus, 0x7E8 engine (the
 one that reports the VIN), 0x7E9 DC-DC, 0x7EA DC-DC with its BMS lost (an active
@@ -55,6 +56,8 @@ GROUP_EMISSIONS, FORMAT_J2012_DA_04 = 0x33, 0x04
 SEVERITY = 0x02
 #: J1979-2 snapshot records: first frame, second (latest) frame.
 RECORD_FIRST, RECORD_LATEST, RECORD_ALL = 0x00, 0xF0, 0xFF
+#: J1979-2 per-DTC extended data: in-use ratio, test results (CCR (g)(5.1), (g)(4.5.1)).
+RECORD_IUMPR, RECORD_TEST_RESULTS = 0x91, 0x92
 NRC_SERVICE, NRC_SUBFUNCTION, NRC_LENGTH, NRC_RANGE = 0x11, 0x12, 0x13, 0x31
 #: ISO 14229-1 7.5: never sent in answer to a functional request.
 FUNCTIONAL_SILENT = {0x11, 0x12, 0x31, 0x7E, 0x7F}
@@ -152,7 +155,8 @@ class Dtc:
 
 @dataclass
 class TestResult:
-    """One $06 test (OBDMID, TID) and its unit and scaling id: raw value, min, max."""
+    """One $06 test (OBDMID, TID) and its unit and scaling id: raw value, min, max; on
+    J1979-2 the monitor's own DTC names it (CCR (g)(4.4.2)(A))."""
 
     mid: int
     tid: int
@@ -160,6 +164,7 @@ class TestResult:
     value: int
     low: int
     high: int
+    dtc: int
 
 
 @dataclass
@@ -178,6 +183,8 @@ class Profile:
     results: list[TestResult] = field(default_factory=list)
     #: 09 08 counters (2 bytes each), never cleared ((g)(5.2.1)(B)); empty: unsupported.
     iupr: list[int] = field(default_factory=list)
+    #: The DTC of each 09 08 numerator / denominator pair (None: monitor not fitted).
+    iupr_dtcs: tuple[int | None, ...] = ()
 
 
 class Responder:
@@ -291,24 +298,34 @@ class Responder:
             0x0D: _u8(72), 0x11: _u8(22 * 255 / 100),
         }  # fmt: skip
         p0171 = Dtc(0x017100, PDTC | TFTOC | TFSLC)
+        # One DTC per monitor with results or ratios, tested and passing ((g)(4.4.2)(A)):
+        # O2 B1S1 slow response, EGR flow, EVAP 0.020 in., O2 heater B1S1, misfire,
+        # secondary O2 B1.
+        p0133, p0401, p0456, p0135, p0300, p0139 = (
+            Dtc(c, 0) for c in (0x013300, 0x040100, 0x045600, 0x013500, 0x030000, 0x013900)
+        )
         # Catalyst, EVAP, O2 sensor, O2 heater, EGR (byte C bits 0, 2, 5, 6, 7).
         monitors = (0x07, 0b11100101)
         frozen = (0x04, 0x05, 0x0C, 0x0D, 0x11)
         # Our own UASID choices (0x0A 0.122 mV, 0x10 ms, 0x17 0.01 kPa, 0x20 1/256,
         # 0x24 counts); not verified against J1979-DA.
         results = [
-            TestResult(0x01, 0x01, 0x0A, 3686, 3277, 4096),  # O2 B1S1 rich-lean threshold
-            TestResult(0x21, 0x80, 0x20, 90, 0, 192),  # catalyst B1 oxygen storage ratio
-            TestResult(0x31, 0x80, 0x17, 1250, 500, 3000),  # EGR B1 flow, kPa
-            TestResult(0x3C, 0x80, 0x17, 20, 0, 50),  # EVAP 0.040 in. leak, kPa
-            TestResult(0x41, 0x80, 0x10, 12000, 0, 30000),  # O2 heater B1S1 warm-up, ms
-            TestResult(0xA1, 0x0B, 0x24, 0, 0, 25),  # misfire, EWMA counts
+            TestResult(0x01, 0x01, 0x0A, 3686, 3277, 4096, p0133.code),  # O2 B1S1 rich-lean
+            TestResult(0x21, 0x80, 0x20, 90, 0, 192, p0420.code),  # catalyst B1 storage ratio
+            TestResult(0x31, 0x80, 0x17, 1250, 500, 3000, p0401.code),  # EGR B1 flow, kPa
+            TestResult(0x3C, 0x80, 0x17, 20, 0, 50, p0456.code),  # EVAP 0.020 in. leak, kPa
+            TestResult(0x41, 0x80, 0x10, 12000, 0, 30000, p0135.code),  # O2 heater B1S1, ms
+            TestResult(0xA1, 0x0B, 0x24, 0, 0, 25, p0300.code),  # misfire, EWMA counts
         ]
         # OBDCOND, IGNCNTR, then COMP/COND: CAT1, CAT2, O2S1, O2S2, EGR, AIR, EVAP,
         # SO2S1, SO2S2 (spark ignition, 20 counters). One bank: bank 2 and AIR zero.
         iupr = [120, 300, 50, 120, 0, 0, 60, 120, 0, 0, 40, 120, 0, 0, 30, 120, 55, 120, 0, 0]
-        return Profile("engine", b"ECM-ENGINE", b"ENG-4.2.0", pids, frozen, [p0420, p0171],
-                       monitors=monitors, results=results, iupr=iupr)  # fmt: skip
+        iupr_dtcs = (p0420.code, None, p0133.code, None, p0401.code, None, p0456.code,
+                     p0139.code, None)  # fmt: skip
+        dtcs = [p0420, p0171, p0133, p0401, p0456, p0135, p0300, p0139]
+        return Profile("engine", b"ECM-ENGINE", b"ENG-4.2.0", pids, frozen, dtcs,
+                       monitors=monitors, results=results, iupr=iupr,
+                       iupr_dtcs=iupr_dtcs)  # fmt: skip
 
     # ─── Model ─────────────────────────────────────────────────────────────
 
@@ -375,9 +392,10 @@ class Responder:
 
     def _supported(self, id_: int, scope: str) -> bool:
         if scope in ("info", "uds_info"):
-            # IUPR is per DTC on J1979-2 (19 06 record 0x91): not a DID.
+            # J1979-2 ratios are per DTC (19 06 record 0x91); F808 (the AUTOSAR F8xx mirror
+            # of 09 08) carries the general denominator and ignition cycles too.
             return (id_ == INFO_VIN and self.vin) or id_ in (INFO_CALID, INFO_CVN, INFO_ECU_NAME) \
-                or (id_ == INFO_IUPR and bool(self.profile.iupr) and scope == "info")  # fmt: skip
+                or (id_ == INFO_IUPR and bool(self.profile.iupr))  # fmt: skip
         if scope == "frozen":
             return id_ == PID_FREEZE_DTC or id_ in self.profile.frozen
         if scope == "tests":
@@ -437,17 +455,33 @@ class Responder:
         stored = [d for d in self.profile.dtcs if d.snapshot is not None]
         return min(stored, key=lambda d: d.stored_at) if stored else None
 
+    def _result(self, r: TestResult) -> bytes:
+        """UASID value min max; zero until the monitor completed after a clear ((g)(4.5.4))."""
+        values = (r.value, r.low, r.high) if self._complete() else (0, 0, 0)
+        return bytes([r.uasid]) + b"".join(v.to_bytes(2, "big") for v in values)
+
     def _results(self, mid: int) -> bytes:
-        """$06 records MID TID UASID value min max; zero until the monitor completed
-        after a clear ((g)(4.5.4))."""
-        done, out = self._complete(), b""
-        for r in self.profile.results:
-            if r.mid == mid:
-                values = (r.value, r.low, r.high) if done else (0, 0, 0)
-                out += bytes([r.mid, r.tid, r.uasid]) + b"".join(
-                    v.to_bytes(2, "big") for v in values
-                )
-        return out
+        """$06 records MID TID UASID value min max."""
+        return b"".join(
+            bytes([r.mid, r.tid]) + self._result(r) for r in self.profile.results if r.mid == mid
+        )
+
+    def _ratio(self, code: int) -> bytes | None:
+        """19 06 record 0x91 of a DTC: its monitor's numerator and denominator (09 08's)."""
+        p = self.profile
+        if code not in p.iupr_dtcs:
+            return None
+        i = 2 + 2 * p.iupr_dtcs.index(code)
+        return b"".join(v.to_bytes(2, "big") for v in p.iupr[i : i + 2])
+
+    def _ext_record(self, code: int, record: int) -> bytes | None:
+        """J1979-2 record 0x91 / 0x92 data of a DTC; None: that DTC does not support it."""
+        if record == RECORD_IUMPR:
+            return self._ratio(code)
+        if record != RECORD_TEST_RESULTS:
+            return None
+        tests = [self._result(r) for r in self.profile.results if r.dtc == code]
+        return b"".join(tests) if tests else None
 
     def _availability(self, ids: bytes, scope: str) -> bytes:
         """Up to 6 availability ids: `id bitmap` each, those non-zero (and 00)."""
@@ -571,6 +605,27 @@ class Responder:
                     if d.snapshot is not None and req[5] in (record, RECORD_ALL):  # type: ignore[union-attr]
                         out += self._frame_record(d, record)  # type: ignore[arg-type]
                 return b"\x59" + bytes(out)
+            if kind == 0x06:  # 19 06 DTC record: J1979-2's records only
+                _need(len(req) == 6, NRC_LENGTH)
+                d = next(
+                    (d for d in self.profile.dtcs if d.code == int.from_bytes(req[2:5], "big")),
+                    None,
+                )
+                data = None if d is None else self._ext_record(d.code, req[5])
+                _need(data is not None, NRC_RANGE)
+                return b"\x59\x06" + req[2:5] + bytes([d.status, req[5]]) + data  # type: ignore[union-attr, operator]
+            if kind == 0x1A:  # the DTCs that support record 0x91 / 0x92; 0x31 if none
+                _need(
+                    len(req) >= 3 and req[2] in (RECORD_IUMPR, RECORD_TEST_RESULTS), NRC_SUBFUNCTION
+                )
+                _need(len(req) == 3, NRC_LENGTH)
+                listed = [
+                    d for d in self.profile.dtcs if self._ext_record(d.code, req[2]) is not None
+                ]
+                _need(bool(listed), NRC_RANGE)  # SWS_Dcm_01609
+                return bytes([0x59, 0x1A, 0xFF, req[2]]) + b"".join(
+                    d.code.to_bytes(3, "big") + bytes([d.status]) for d in listed
+                )
             want = {0x42: 5, 0x55: 3, 0x56: 4}.get(kind)
             _need(want is not None, NRC_SUBFUNCTION)
             _need(len(req) == want, NRC_LENGTH)
@@ -610,7 +665,11 @@ def _obd_request(req: bytes) -> bool:
         return len(req) >= 2 and (0xF4 <= req[1] <= 0xF8 or req[1] == 0xE0)
     if req[0] == 0x19 and len(req) >= 2:
         frames = req[1] == 0x04 and len(req) == 6 and req[5] in (RECORD_FIRST, RECORD_LATEST)
-        return req[1] in (0x42, 0x55, 0x56) or frames
+        records = (RECORD_IUMPR, RECORD_TEST_RESULTS)
+        ext = (req[1] == 0x06 and len(req) == 6 and req[5] in records) or (
+            req[1] == 0x1A and len(req) >= 3 and req[2] in records
+        )
+        return req[1] in (0x42, 0x55, 0x56) or frames or ext
     return req[0] == 0x14 and len(req) >= 4 and int.from_bytes(req[1:4], "big") == EMISSIONS
 
 

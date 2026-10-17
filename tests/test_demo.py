@@ -53,6 +53,9 @@ def test_engine_results_and_ratios_follow_a_clear(monkeypatch):
     r.request(b"\x04")
     assert r.request(b"\x06\x21") == b"\x46\x21\x80\x20" + bytes(6)
     assert r.request(b"\x09\x08") == ratios  # never cleared
+    # J1979-2, per DTC: the same result (zeroed) and ratio (kept)
+    assert r.request(b"\x19\x06\x04\x20\x00\x92")[-7:] == b"\x20" + bytes(6)
+    assert r.request(b"\x19\x06\x04\x20\x00\x91")[-4:] == ratios[7:11]  # CAT1
     monkeypatch.setattr(demo, "MONITOR_RUN_S", 60.0)
     r.request(b"\x11\x01")
     assert (
