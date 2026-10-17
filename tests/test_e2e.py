@@ -161,6 +161,31 @@ def test_detect_does_not_fall_back_to_250k_on_silence(monkeypatch):
         vehicle.join(3)
 
 
+@pytest.mark.parametrize(
+    "ecu, settings, sent",
+    [(0x7E8, {}, {(0x7E0, False)}),
+     (0x18DAF110, {"addressing": "29-bit"}, {(0x18DA10F1, True)})],
+    ids=["11-bit", "29-bit"],
+)  # fmt: skip
+def test_detect_with_an_ecu_asks_it_on_its_own_ids_and_bitrate(monkeypatch, ecu, settings, sent):
+    """An `ecu` is asked on its addressing only (never a computed non-OBD id); silence, or
+    an id that addressing cannot map, is no bus error: no other bitrate."""
+    channel = f"obd-e2e-{next(_channels)}"
+    sniffer = Sniffer(channel)
+    config = json.dumps({"interface": "virtual", "channel": channel})
+    vehicle = _open(Vehicle("car", Interface.OTHER, {"config_json": config, **settings},
+                            dict(ADVANCED_DEFAULTS)))  # fmt: skip
+    monkeypatch.setattr(vehicle, "can_set_bitrate", lambda: True)
+    try:
+        with pytest.raises(scan.NoAnswer, match="250000 was not tried"):
+            scan.detect(vehicle, ecu)
+        assert {(m.arbitration_id, m.is_extended_id) for m in sniffer.frames} == sent
+    finally:
+        vehicle.stop()
+        vehicle.join(3)
+        sniffer.close()
+
+
 @pytest.mark.parametrize("car", [({"extended": True}, {})], indirect=True)
 def test_detect_finds_29_bit(car):
     vehicle, _ = car

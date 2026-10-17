@@ -14,7 +14,9 @@ import threading
 import time
 from typing import Any
 
+import can
 from udsoncan import Response
+from zelos_can import isotp as diag
 from zelos_can import obd
 
 from zelos_extension_obd.link import CanLink
@@ -245,47 +247,78 @@ def ensure(vehicle: Vehicle) -> str:
     return vehicle.protocol
 
 
+def _addressings(ecu: int | None) -> tuple[bool, ...]:
+    """Addressings (extended?) detect tries: both, or the one `ecu`'s responder id is on."""
+    if ecu is None:
+        return (False, True)
+    if ecu in diag.RESPONDERS_11:
+        return (False,)
+    if ecu in diag.RESPONDERS_29:
+        return (True,)
+    raise ValueError(f"ecu 0x{ecu:X}: not an OBD responder id (0x7E8-0x7EF, 0x18DAF1xx)")
+
+
+def _bus_error(e: Exception) -> bool:
+    """A send or open failure from the adapter; not a closed link or a programming error."""
+    return isinstance(e, can.CanError) or (
+        isinstance(e, OSError) and not isinstance(e, ConnectionError)
+    )
+
+
 def detect(vehicle: Vehicle, ecu: int | None = None) -> dict[str, Any]:
-    """ISO 15765-4 initialization: 11-bit then 29-bit at the configured bitrate (500k by
-    default, the legislated one); the other bitrate only when that one showed bus errors
-    (an error frame, a send or open failure), never on silence alone (ISO 15765-4:2005
-    4.1-4.2, 2021 6.3.2). The first variant answered is kept. Bitrates only where the
-    adapter takes one."""
+    """ISO 15765-4 initialization: 11-bit then 29-bit (only `ecu`'s with one) at the
+    configured bitrate (500k by default, the legislated one); the other bitrate only when
+    that one showed bus errors (an error frame, a send or open failure, a receive failure),
+    never on silence alone (ISO 15765-4:2005 4.1-4.2, 2021 6.3.2). The first variant
+    answered is kept. Bitrates only where the adapter takes one."""
     with vehicle.busy("detect", ecu):
         link = vehicle.link
         if not isinstance(link, CanLink):
             vehicle.protocol = None
             got = probe(vehicle)
             return _detected(vehicle, got, [])
+        addressings = _addressings(ecu)
         configured = (link.extended, link.bitrate)
         rates: list[int | None] = [None]
         if vehicle.can_set_bitrate():
             first = link.bitrate or 500000
             rates = [first, 250000 if first == 500000 else 500000]
         tried: list[dict[str, Any]] = []
-        for rate in rates:
-            errors = False
-            for extended in (False, True):
-                label = {"addressing": "29-bit" if extended else "11-bit", "bitrate": rate}
-                before = 0
-                try:
-                    vehicle.reopen(extended, rate)
+        try:
+            for rate in rates:
+                errors = False
+                for extended in addressings:
+                    label = {"addressing": "29-bit" if extended else "11-bit", "bitrate": rate}
+                    try:
+                        vehicle.reopen(extended, rate)
+                    except Exception as e:
+                        if not _bus_error(e):
+                            raise
+                        tried.append({**label, "answered": False, "error": str(e)})
+                        errors = True
+                        break  # the adapter refused this bitrate
                     before = link.error_frames
-                    got = probe(vehicle)
-                except NoAnswer:
-                    got = None
-                except Exception as e:  # an adapter refusing the bitrate, a send failing
-                    tried.append({**label, "answered": False, "error": str(e)})
-                    errors = True
-                    continue
-                frames = link.error_frames - before
-                errors |= frames > 0 or bool(link.health())
-                tried.append({**label, "answered": bool(got),
-                              **({"error_frames": frames} if frames else {})})  # fmt: skip
-                if got:
-                    return _detected(vehicle, got, tried)
-            if not errors:
-                break
+                    try:
+                        got = probe(vehicle)
+                    except NoAnswer:
+                        got = None
+                    except Exception as e:
+                        if not _bus_error(e):
+                            raise
+                        tried.append({**label, "answered": False, "error": str(e)})
+                        errors = True
+                        continue
+                    frames = link.error_frames - before
+                    errors |= frames > 0 or bool(link.health())
+                    tried.append({**label, "answered": bool(got),
+                                  **({"error_frames": frames} if frames else {})})  # fmt: skip
+                    if got:
+                        return _detected(vehicle, got, tried)
+                if not errors:
+                    break
+        except Exception:
+            vehicle.reopen(*configured)
+            raise
         vehicle.reopen(*configured)
         hint = "" if errors or len(rates) == 1 else (
             f"; no bus errors at {rates[0]} bit/s, so {rates[1]} was not tried "
