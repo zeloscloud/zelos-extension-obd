@@ -2,7 +2,7 @@
 
 A Zelos extension that is an OBD-II scan tool: live PIDs, DTCs, readiness monitors, freeze frames, vehicle information and a gated DTC clear, over CAN (ISO 15765-4) or DoIP (ISO 13400-2). Legacy OBD-II (SAE J1979 / ISO 15031-5) and OBDonUDS (SAE J1979-2), from the Zelos App, app extensions or the shell.
 
-Every action except `list_vehicles`, `get_status` and the settings helpers transmits on the vehicle's bus. Requests are functional (0x7DF / 0x18DB33F1): every emissions ECU that supports a request answers it, and results are per ECU.
+Every action except `list_vehicles`, `get_status`, `stop_polling` and the settings helpers transmits on the vehicle's bus. Requests are functional (0x7DF / 0x18DB33F1): every emissions ECU that supports a request answers it, and results are per ECU.
 
 ## Features
 
@@ -126,22 +126,25 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### Demo vehicle
 
-`zelos_extension_obd/demo/` is the bench DC-DC node's OBD-II responder in Python, to its firmware's contract, plus an engine ECU. Each answers J1979 and J1979-2 on one DTC memory; it answers 22 F810, so `auto` reads it as J1979-2 (`protocol: legacy` for J1979).
+`zelos_extension_obd/demo/`: the DC-DC node's OBD-II responder to its firmware's contract, plus an engine ECU; J1979 and J1979-2 on one DTC memory (`auto` reads J1979-2). Virtual buses only.
 
 | ECU | Shows |
 |---|---|
-| 0x7E8 engine | P0420 confirmed, MIL on, permanent; P0171 pending; readiness monitors, PID 41, test results (06; J1979-2 per DTC) and in-use ratios (09 08, F808; J1979-2 per DTC), the same values on both protocols; the only VIN |
+| 0x7E8 engine | P0420 confirmed, MIL, permanent; P0171 pending; readiness, PID 41, test results, in-use ratios; the only VIN |
 | 0x7E9 DC-DC | no faults |
-| 0x7EA DC-DC, BMS lost | U0111 confirmed; after a clear it returns pending, confirmed the next cycle |
+| 0x7EA DC-DC, BMS lost | U0111 confirmed; after a clear pending, confirmed the next cycle |
+| Lifecycle | confirm on the 2nd failing cycle; MIL off after 3 passing; age out after 40; permanent goes with the MIL, or 1 passing cycle after a clear; ECUReset (11 01) ends a cycle |
+| 29-bit | 0x18DAF110 + n |
 
-DTCs confirm on a second failing cycle, the MIL goes off after 3 passing cycles, a confirmed code ages out after 40, a permanent code goes with the MIL, or after one passing cycle following a clear. ECUReset (11 01) ends an operation cycle. A DC-DC whose BMS state is `None` (`DemoVehicle(profiles=(("dcdc", None),))`) watches BMS_Limits (0x201) on its bus, as the node does. 29-bit: 0x18DAF110 + n.
+### Tests
 
-The zelos-examples OBD-II conformance suite is vendored in `tests/conformance` and runs in `just test` against one DC-DC responder, on CAN and through the DoIP entity simulator (`tests/doip_entity.py`: tester 0x0E80, ECUs 0x1001 + n, functional 0xE400). Update it with `just sync-conformance ~/zelos/zelos-examples`; `ZELOS_EXAMPLES=<checkout> just test` checks the copy against upstream.
-
-`tests/test_replay.py` replays real vehicles' OBD-II traffic (`tests/fixtures/obd`, MIT, licences in `LICENSES`) through the client against an independent oracle, and sends their requests to the demo. Update the traces with `just sync-replay ~/zelos/src`; `ZELOS_SRC=<checkout>` checks them against upstream.
+| Suite | Update | Check against upstream |
+|---|---|---|
+| `tests/conformance`: the zelos-examples OBD-II suite, on CAN and DoIP (`tests/doip_entity.py`) | `just sync-conformance <zelos-examples>` | `ZELOS_EXAMPLES=<zelos-examples> just test` |
+| `tests/test_replay.py`: real vehicles' traffic (`tests/fixtures/obd`, MIT, `LICENSES`) against an independent oracle | `just sync-replay <zelos-src>` | `ZELOS_SRC=<zelos-src> just test` |
 
 ```bash
-just sim                       # vcan0, Linux
+just sim                       # demo on vcan0, Linux
 just sim-doip                  # DoIP entity on 127.0.0.1:13400
 uv run main.py demo-ecu --help # --extended, --responders, --uds-only
 ```

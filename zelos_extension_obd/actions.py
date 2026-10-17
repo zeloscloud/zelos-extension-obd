@@ -1,11 +1,11 @@
 """`OBD/<name>` actions: one namespace keyed by a `vehicle` parameter.
 
-Every action but `list_vehicles`, `get_status` and the config-form helpers transmits
-on the vehicle's bus, functionally (every ECU) or, with `ecu`, physically to one ECU.
-Results are per responder (each ECU that answered), keyed by its CAN id or DoIP address
-as the trace names it, with `compliance` notes when an answer breaks a rule. `clear_dtcs`
-clears only with `confirm`; without it, it reports what a clear would erase and sends no
-clear.
+Every action but `list_vehicles`, `get_status`, `stop_polling` and the config-form
+helpers transmits on the vehicle's bus, functionally (every ECU) or, with `ecu`,
+physically to one ECU. Results are per responder (each ECU that answered), keyed by its
+CAN id or DoIP address as the trace names it, with `compliance` notes when an answer
+breaks a rule. `clear_dtcs` clears only with `confirm`; without it, it reports what a
+clear would erase and sends no clear.
 """
 
 from __future__ import annotations
