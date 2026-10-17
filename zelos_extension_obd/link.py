@@ -199,7 +199,7 @@ class DoipLink:
         self.star = float(advanced["p2_star_timeout"])
         self.client: doip.Client | None = None
         self.vehicle: doip.Vehicle | None = None
-        self.address = cfg.ecu if cfg.ecu is not None else 0xE400
+        self.address = cfg.ecu if cfg.ecu is not None else 0xE400  # functional group
         self.extended = False
         self.known: set[int] = set()
 

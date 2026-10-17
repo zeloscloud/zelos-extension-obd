@@ -30,6 +30,8 @@ HEALTH_TICK = 0.25
 STOP_BOUND = 3.0
 #: Longest a request waits for the vehicle: below an action's 30 s timeout.
 LOCK_TIMEOUT = 20.0
+#: ISO 13400-2 functional logical address: every ECU behind the entity.
+FUNCTIONAL_DOIP = 0xE400
 
 
 class State(StrEnum):
@@ -69,6 +71,11 @@ class Vehicle:
         }
         self.link: CanLink | DoipLink
         if interface == Interface.DOIP:
+            # Every ECU answers a request to the functional group unless one is named.
+            settings_doip = dict(link.get("doip") or {})
+            if not str(settings_doip.get("ecu_address") or "").strip():
+                settings_doip["ecu_address"] = f"0x{FUNCTIONAL_DOIP:04X}"
+            link["doip"] = settings_doip
             self.link = DoipLink(doip.config(link), advanced)  # ValueError
         else:
             if interface == Interface.DEMO:
