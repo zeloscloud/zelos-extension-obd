@@ -94,7 +94,8 @@ def test_clear_without_confirm_sends_no_clear(car):
     assert engine["monitors"]["Catalyst"] == "incomplete"
     dtcs = scan.read_dtcs(vehicle)["responders"]
     assert dtcs["07e8"] == {"stored": [], "pending": [], "permanent": ["P0420"]}
-    assert dtcs["07ea"]["stored"] == ["U0111"]  # an active fault returns
+    # An active fault returns, pending until a second cycle confirms it (CCR (d)(2.2.2)).
+    assert dtcs["07ea"]["stored"] == [] and dtcs["07ea"]["pending"] == ["U0111"]
 
 
 @pytest.mark.parametrize(
@@ -104,9 +105,10 @@ def test_29_bit_obd_on_uds_is_probed_and_reassembles_per_ecu(car):
     vehicle, sniffer = car
     info = scan.vehicle_info(vehicle)
     assert info["protocol"] == "uds"
-    assert {r: v["vin"] for r, v in info["responders"].items()} == dict.fromkeys(
-        ("18daf110", "18daf111", "18daf112"), "1ZLSDCDC0BENCH001"
-    )
+    # One ECU per vehicle reports the VIN (CCR (g)(4.8.1)); every one its CALID.
+    assert {r: v.get("vin") for r, v in info["responders"].items()} == {
+        "18daf110": "1ZLSDCDC0BENCH001", "18daf111": None, "18daf112": None,
+    }  # fmt: skip
     flow = [m for m in sniffer.frames if m.arbitration_id == 0x18DA10F1]
     assert flow and all(m.data[0] >> 4 == 3 and m.dlc == 8 for m in flow)  # our flow control
     dtcs = scan.read_dtcs(vehicle)["responders"]["18daf110"]
