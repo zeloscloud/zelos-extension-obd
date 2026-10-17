@@ -42,7 +42,6 @@ dev = [
     "jsonschema>=4.0.0",
     # The vendored conformance suite (tests/conformance) imports these.
     "cantools>=41.3.1",
-    "pyxcp==0.29.19",
 ]
 
 [build-system]
