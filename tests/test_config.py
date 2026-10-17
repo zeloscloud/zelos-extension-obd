@@ -40,6 +40,8 @@ def test_schema_takes_each_interface_and_create_vehicles_builds_them():
           {"interface": "SocketCAN", "channel": "can0", "name": "b"}], "one bus"),
         ([{"interface": "Demo", "name": "a/b"}], "not allowed"),
         ([{"interface": "Demo", "addressing": "16-bit"}], "addressing"),
+        ([{"interface": "PCAN", "channel": "PCAN_USBBUS1",
+           "config_json": '{"bitrate": 125000}'}], "use the Bitrate setting"),
     ],
 )  # fmt: skip
 def test_refused(vehicles, error):

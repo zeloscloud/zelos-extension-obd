@@ -13,6 +13,7 @@ J1979-2 allow none, more than one response-pending.
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import threading
 import time
@@ -24,7 +25,13 @@ import zelos_sdk
 from zelos_can import doip
 from zelos_can import isotp as diag
 
-from zelos_extension_obd.constants import BITRATE_INTERFACES, INTERFACES, Interface, trace_layout
+from zelos_extension_obd.constants import (
+    BITRATE_INTERFACES,
+    BITRATES,
+    INTERFACES,
+    Interface,
+    trace_layout,
+)
 from zelos_extension_obd.link import PENDING, Answer, CanLink, DoipLink
 from zelos_extension_obd.trace import Trace
 
@@ -44,6 +51,8 @@ P2_CAN = 0.050
 NRC_LENGTH, NRC_BUSY = 0x13, 0x21
 #: Init requests: 0x21 there restarts the init (ISO 15765-4:2005 4.2.2 e).
 INIT_REQUESTS = (b"\x01\x00", b"\x22\xf8\x10")
+#: Bus kwargs `config_json` may not set: the zelos-can factory merges it over the bitrate.
+TIMING_KEYS = ("bitrate", "fd", "data_bitrate")
 
 
 class State(StrEnum):
@@ -94,6 +103,7 @@ class Vehicle:
                 link.update(interface="zelos-virtual", channel=f"obd-demo-{name}-{id(self):x}")
             else:
                 link["interface"] = str(interface)
+            _check_config_json(interface, link.get("config_json"))
             if interface in BITRATE_INTERFACES:
                 link.setdefault("bitrate", 500000)
             self.link = CanLink(link, name, advanced)
@@ -334,6 +344,27 @@ class Vehicle:
         out["reopens"] = self.reopens
         out["metrics"] = dict(self.counts)
         return out
+
+
+def _check_config_json(interface: Interface, text: Any) -> None:
+    """ValueError when `config_json` would override the bitrate or turn on CAN FD."""
+    if interface not in (*BITRATE_INTERFACES, Interface.OTHER):
+        return  # SocketCAN: the OS sets the bitrate
+    try:
+        extra = json.loads(text) if text else {}
+    except ValueError:
+        return  # the bus factory reports it at open
+    keys = [k for k in TIMING_KEYS if isinstance(extra, dict) and k in extra]
+    rates = " or ".join(map(str, BITRATES))
+    if interface == Interface.OTHER:
+        if extra.get("bitrate", BITRATES[0]) in BITRATES:
+            keys = [k for k in keys if k != "bitrate"]  # Other has no Bitrate setting
+        if keys:
+            raise ValueError(f"config_json {', '.join(keys)}: OBD-II is classic CAN at "
+                             f"bitrate {rates}")  # fmt: skip
+    elif keys:
+        raise ValueError(f"config_json may not set {', '.join(keys)}: use the Bitrate "
+                         f"setting ({rates}); OBD-II is classic CAN")  # fmt: skip
 
 
 def _describe(e: BaseException) -> str:
