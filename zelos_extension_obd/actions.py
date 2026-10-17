@@ -227,22 +227,39 @@ def clear_dtcs(vehicle: str, confirm: bool = False, ecu: str = "") -> dict[str, 
 
 @action(
     "Test Results",
-    "Transmits. On-board monitoring test results (06; J1979-2: 22 F6xx) for one monitor "
-    "id, raw. 00 lists the supported ones.",
+    "Transmits. On-board monitoring test results, decoded (value, limits, unit, pass): "
+    "every supported monitor (06; J1979-2: per DTC, 19 1A 92 then 19 06 DTC 92), or one "
+    "legacy monitor id (00, 20...: the supported ones).",
 )
 @_vehicle_field
-@action.text("mid", title="Monitor ID (hex)", default="00", required=False)
+@action.text("mid", title="Monitor ID (hex)", description="Empty: every supported one",
+             default="", required=False)  # fmt: skip
 @_ecu_field
 @guarded
-def test_results(vehicle: str, mid: str = "00", ecu: str = "") -> dict[str, Any]:
-    try:
-        number = int(str(mid), 16)
-    except ValueError:
-        raise ValueError(f"monitor id {mid!r} is not hex") from None
-    if not 0 <= number <= 0xFF:
-        raise ValueError("monitor id: 00 to FF")
+def test_results(vehicle: str, mid: str = "", ecu: str = "") -> dict[str, Any]:
+    number = None
+    if str(mid).strip():
+        try:
+            number = int(str(mid), 16)
+        except ValueError:
+            raise ValueError(f"monitor id {mid!r} is not hex") from None
+        if not 0 <= number <= 0xFF:
+            raise ValueError("monitor id: 00 to FF")
     v, target = _target(vehicle, ecu)
     return scan.test_results(v, number, target)
+
+
+@action(
+    "In-Use Ratios",
+    "Transmits. In-use monitor performance: general denominator, ignition cycles and each "
+    "monitor's numerator / denominator (09 08 / 0B; J1979-2: 22 F808 / F80B, and per DTC "
+    "19 1A 91 then 19 06 DTC 91).",
+)
+@_vehicle_field
+@_ecu_field
+@guarded
+def in_use_ratios(vehicle: str, ecu: str = "") -> dict[str, Any]:
+    return scan.in_use_ratios(*_target(vehicle, ecu))
 
 
 @action(

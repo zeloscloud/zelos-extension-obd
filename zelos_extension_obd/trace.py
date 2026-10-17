@@ -1,8 +1,9 @@
 """Trace events of one vehicle: requests and answers, and decoded rows per responder.
 
 `tx` one row per request, `rx` one per answer (per responder); `<responder>/pids`,
-`/freeze_frame`, `/dtc` and `/vehicle_info` hold what `zelos_can.obd` decodes, with
-the column names of its catalogue (as the CAN extension's passive `<id>_OBD2` rows).
+`/freeze_frame`, `/dtc`, `/vehicle_info`, `/test_results` and `/in_use` hold what
+`zelos_can.obd` decodes, with the column names of its catalogue (as the CAN extension's
+passive `<id>_OBD2` rows).
 """
 
 from __future__ import annotations
@@ -73,6 +74,27 @@ DTC_FIELDS = [
 INFO_FIELDS = [
     _F("infotype", _T.UInt8),
     *(_F(name, _T.String) for name in ("vin", "calid", "cvn", "ecu_name")),
+]
+
+RESULT_FIELDS = [
+    _F("mid", _T.UInt8),
+    _F("monitor", _T.String),
+    _F("tid", _T.UInt8),
+    _F("dtc", _T.String),
+    _F("uasid", _T.UInt8),
+    *(_F(name, _T.Float64) for name in ("value", "min", "max")),
+    _F("unit", _T.String),
+    _F("pass", _T.Boolean),
+]
+IN_USE_FIELDS = [
+    _F("infotype", _T.UInt8),
+    _F("monitor", _T.String),
+    _F("dtc", _T.String),
+    _F("numerator", _T.UInt16),
+    _F("denominator", _T.UInt16),
+    _F("ratio", _T.Float64),
+    _F("general_denominator", _T.UInt16),
+    _F("ignition_cycles", _T.UInt16),
 ]
 
 _TYPES = {"bool": _T.Boolean, "int": _T.UInt8, "float": _T.Float64, "str": _T.String}
@@ -157,4 +179,14 @@ class Trace:
     def vehicle_info(self, responder: str, row: dict[str, Any]) -> None:
         name = self._declare(f"{responder}/vehicle_info", INFO_FIELDS, {})
         keys = ("infotype", "vin", "calid", "cvn", "ecu_name")
+        self._source.log(name, {k: row[k] for k in keys if row.get(k) is not None})
+
+    def test_result(self, responder: str, row: dict[str, Any]) -> None:
+        name = self._declare(f"{responder}/test_results", RESULT_FIELDS, {})
+        keys = [f.name for f in RESULT_FIELDS]
+        self._source.log(name, {k: row[k] for k in keys if row.get(k) is not None})
+
+    def in_use(self, responder: str, row: dict[str, Any]) -> None:
+        name = self._declare(f"{responder}/in_use", IN_USE_FIELDS, {})
+        keys = [f.name for f in IN_USE_FIELDS]
         self._source.log(name, {k: row[k] for k in keys if row.get(k) is not None})

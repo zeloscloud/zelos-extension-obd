@@ -177,11 +177,18 @@ def info(vehicle, ecu) -> dict:
 
 
 @click.command()
-@click.option("--mid", default="00", show_default=True, help="Monitor id, hex")
+@click.option("--mid", default=None, help="Legacy monitor id, hex (default: every supported one)")
 @command
-def tests(vehicle, mid: str, ecu) -> dict:
-    """Transmits. On-board monitoring test results (06), raw."""
-    return scan.test_results(vehicle, int(mid, 16), ecu)
+def tests(vehicle, mid: str | None, ecu) -> dict:
+    """Transmits. On-board monitoring test results, decoded (06; J1979-2: 19 06 92 per DTC)."""
+    return scan.test_results(vehicle, None if mid is None else int(mid, 16), ecu)
+
+
+@click.command()
+@command
+def ratios(vehicle, ecu) -> dict:
+    """Transmits. In-use performance ratios (09 08 / 0B; J1979-2: F808 / F80B, 19 06 91 per DTC)."""
+    return scan.in_use_ratios(vehicle, ecu)
 
 
 @click.command()
@@ -233,4 +240,4 @@ def demo_ecu(interface, channel, bitrate, extended, responders, uds_only) -> Non
         demo.stop()
 
 
-COMMANDS = [detect, pids, read, status, dtcs, freeze, info, tests, clear, demo_ecu]
+COMMANDS = [detect, pids, read, status, dtcs, freeze, info, tests, ratios, clear, demo_ecu]

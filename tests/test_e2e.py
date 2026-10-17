@@ -216,3 +216,73 @@ def test_actions_report_errors_without_raising():
     assert actions.read_pids(vehicle="nope", pids="0C")["status"] == "error"
     with pytest.raises(ValueError, match="unknown PID"):
         scan.parse_pids("NotAPid")
+
+
+# The engine's monitors: legacy name (MID / 09 08 monitor) and its J1979-2 DTC.
+RESULT_DTCS = {0x01: "P0133-00", 0x21: "P0420-00", 0x31: "P0401-00", 0x3C: "P0456-00",
+               0x41: "P0135-00", 0xA1: "P0300-00"}  # fmt: skip
+RATIO_DTCS = {"CatalystB1": "P0420-00", "O2SensorB1": "P0133-00", "EGRVVT": "P0401-00",
+              "EvapSystem": "P0456-00", "SecondaryO2SensorB1": "P0139-00"}  # fmt: skip
+
+
+def test_legacy_and_j1979_2_give_the_same_values():
+    """One demo vehicle read by two scan tools, protocol legacy and uds: readiness, PID 41,
+    test results, in-use ratios, DTCs, freeze frames and vehicle information agree."""
+    channel = f"obd-e2e-{next(_channels)}"
+    demo = DemoVehicle(channel, interface="virtual").start()
+    config = json.dumps({"interface": "virtual", "channel": channel})
+    got = {}
+    try:
+        for protocol in ("legacy", "uds"):
+            vehicle = _open(Vehicle(protocol, Interface.OTHER,
+                                    {"config_json": config, "protocol": protocol},
+                                    dict(ADVANCED_DEFAULTS)))  # fmt: skip
+            try:
+                got[protocol] = {
+                    "status": scan.monitor_status(vehicle)["responders"],
+                    "pids": scan.read_pids(vehicle, [0x41, 0x1C, 0x30, 0x31])["responders"],
+                    "tests": scan.test_results(vehicle)["responders"],
+                    "ratios": scan.in_use_ratios(vehicle)["responders"],
+                    "dtcs": scan.read_dtcs(vehicle)["responders"],
+                    "frames": scan.freeze_frame(vehicle)["responders"],
+                    "info": scan.vehicle_info(vehicle)["responders"],
+                }
+                assert vehicle.protocol == protocol
+            finally:
+                vehicle.stop()
+                vehicle.join(3)
+    finally:
+        demo.stop()
+    legacy, uds = got["legacy"], got["uds"]
+    engine = "07e8"
+    assert legacy["status"] == uds["status"]
+    assert legacy["status"][engine]["monitors"]["Catalyst"] == "complete"
+    assert legacy["pids"] == uds["pids"]
+    assert legacy["info"] == uds["info"]
+
+    # test results: by MID / TID on legacy, by the monitor's DTC on J1979-2
+    def results(per, key):
+        return sorted((key(r), r["uasid"], r["value"], r["min"], r["max"], r.get("unit"), r["pass"],
+                       tuple(r["raw"])) for r in per[engine]["results"])  # fmt: skip
+
+    assert results(legacy["tests"], lambda r: RESULT_DTCS[int(r["mid"], 16)]) == results(
+        uds["tests"], lambda r: r["dtc"]
+    )
+    assert len(legacy["tests"][engine]["results"]) == 6 and set(legacy["tests"]) == {engine}
+
+    # in-use ratios: the 09 08 record both ways (F808), and per DTC on J1979-2
+    lr, ur = legacy["ratios"][engine], uds["ratios"][engine]
+    assert {k: lr[k] for k in lr} == {k: ur[k] for k in lr}
+    assert ur["dtcs"] == {RATIO_DTCS[m]: v for m, v in lr["monitors"].items() if m in RATIO_DTCS}
+    assert set(legacy["ratios"]) == set(uds["ratios"]) == {engine}
+
+    # DTCs: 2-byte codes on legacy, the same with the failure type on J1979-2
+    for r in legacy["dtcs"]:
+        for kind in ("stored", "pending", "permanent"):
+            assert [f"{c}-00" for c in legacy["dtcs"][r][kind]] == uds["dtcs"][r][kind], (r, kind)
+
+    # freeze frame 0 = the first-occurrence record of its DTC
+    for r, frame in legacy["frames"].items():
+        first = next(f for f in uds["frames"][r]["frames"]
+                     if f["dtc"] == f"{frame['dtc']}-00" and f["record"] == "first")  # fmt: skip
+        assert first["values"] == frame["values"], r

@@ -30,7 +30,7 @@ MAX_PIDS = {LEGACY: 6, UDS: 6}
 #: A functional request on CAN is one single frame (7 bytes): 22 and 3 DIDs.
 FUNCTIONAL_DIDS = 3
 #: J1979-2 DID bases: DID = base + PID / OBDMID / infotype.
-DID_PIDS, DID_MONITOR, DID_TESTS, DID_INFO = 0xF400, 0xF500, 0xF600, 0xF800
+DID_PIDS, DID_MONITOR, DID_INFO = 0xF400, 0xF500, 0xF800
 DID_MIL_COUNT = 0xF501
 #: ISO 15765-4:2021 6.1.1: OBDonUDS ECUs answer 22 F810 (protocol identification).
 DID_PROTOCOL = 0xF810
@@ -132,6 +132,10 @@ def _rows(vehicle: Vehicle, responder: int, data: bytes, kind: str | None = None
             trace.dtc(key, row)
         elif event == "VehicleInfo" and row.get("infotype") in INFOTYPES:
             trace.vehicle_info(key, row)
+        elif event == "TestResults" and row.get("uasid") is not None:
+            trace.test_result(key, row)
+        elif event == "InUse" and row.get("numerator") is not None:
+            trace.in_use(key, row)
     return rows
 
 
@@ -381,7 +385,7 @@ def read_pids(
 
 
 def monitor_status(vehicle: Vehicle, ecu: int | None = None) -> dict[str, Any]:
-    """MIL, confirmed DTC count and readiness (01 01; 22 F501 on J1979-2: MIL and count)."""
+    """MIL, confirmed DTC count and readiness (01 01; 22 F501 on J1979-2, the same bytes)."""
     with vehicle.busy("monitor_status", ecu):
         protocol = ensure(vehicle)
         payload, sid, pid = (
@@ -538,20 +542,149 @@ def vehicle_info(vehicle: Vehicle, ecu: int | None = None) -> dict[str, Any]:
     return _result(vehicle, per)
 
 
-def test_results(vehicle: Vehicle, mid: int, ecu: int | None = None) -> dict[str, Any]:
-    """On-board monitoring test results (06 MID; 22 F6xx), raw."""
+def _bitmap_walk(vehicle: Vehicle, service: int) -> dict[int, list[int]]:
+    """Legacy availability ids (00, 20, ...) per responder, while any says there are more."""
+    per: dict[int, list[int]] = {}
+    base = 0x00
+    while base <= 0xE0:
+        more = False
+        for responder, a in vehicle.request(bytes([service, base]), base).items():
+            if not positive(a.data, service):
+                continue
+            for row in _rows(vehicle, responder, a.data):
+                ids = [int(x, 16) for x in (row.get("supported") or "").split(",") if x]
+                more |= base + 0x20 in ids
+                per.setdefault(responder, []).extend(i for i in ids if i & 0x1F)
+        if not more:
+            break
+        base += 0x20
+    return per
+
+
+def _supporting(vehicle: Vehicle, record: int) -> dict[int, list[int]]:
+    """J1979-2 19 1A: per responder, the 3-byte DTCs that support extended data `record`."""
+    per: dict[int, list[int]] = {}
+    for responder, a in vehicle.request(bytes([0x19, 0x1A, record]), 0x1A).items():
+        if positive(a.data, 0x19):
+            _rows(vehicle, responder, a.data)
+            body = a.data[4:]
+            per[responder] = [
+                int.from_bytes(body[i : i + 3], "big") for i in range(0, len(body) - 3, 4)
+            ]
+    return per
+
+
+def _per_dtc(vehicle: Vehicle, record: int) -> dict[int, list[dict]]:
+    """19 1A `record`, then 19 06 DTC `record` of each DTC, physically to its ECU: the rows."""
+    per: dict[int, list[dict]] = {}
+    for responder, codes in _supporting(vehicle, record).items():
+        with vehicle.busy("ext_data", responder):
+            for raw in codes:
+                request = bytes([0x19, 0x06, *raw.to_bytes(3, "big"), record])
+                a = vehicle.request(request, 0x06).get(responder)
+                if a is not None and positive(a.data, 0x19):
+                    per.setdefault(responder, []).extend(_rows(vehicle, responder, a.data))
+    return per
+
+
+RESULT_KEYS = ("uasid", "value", "min", "max", "unit", "pass")
+
+
+def _test_result(row: dict) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    if row.get("mid") is not None:
+        out = {"mid": f"0x{row['mid']:02X}", "monitor": row.get("monitor"),
+               "tid": f"0x{row['tid']:02X}", "test": row.get("test")}  # fmt: skip
+    if row.get("dtc"):
+        out["dtc"] = row["dtc"]
+    out.update({k: row[k] for k in RESULT_KEYS if row.get(k) is not None})
+    out["raw"] = [row["value_raw"], row["min_raw"], row["max_raw"]]
+    return out
+
+
+def test_results(
+    vehicle: Vehicle, mid: int | None = None, ecu: int | None = None
+) -> dict[str, Any]:
+    """On-board monitoring test results, decoded: value, limits, unit and pass. Legacy: every
+    supported MID (06 bitmaps, then 06 MID each), or the one `mid` (00, 20...: its bitmap).
+    J1979-2: per DTC, 19 1A 92 then 19 06 DTC 92 (CCR 1968.2 (g)(4.5.1))."""
     with vehicle.busy("test_results", ecu):
         protocol = ensure(vehicle)
+        per: dict[int, dict[str, Any]] = {}
         if protocol == UDS:
-            did = DID_TESTS + mid
-            payload, sid, pid = b"\x22" + did.to_bytes(2, "big"), 0x22, did
-        else:
-            payload, sid, pid = bytes([0x06, mid]), 0x06, mid
-        per = {}
-        for responder, a in vehicle.request(payload, pid).items():
-            ok = positive(a.data, sid)
-            per[responder] = {"data": a.data[1:].hex().upper()} if ok else nrc_fields(a.data)
-    return _result(vehicle, per, mid=f"0x{mid:02X}")
+            if mid is not None:
+                raise ValueError("J1979-2 reports test results by DTC, not by monitor id")
+            for responder, rows in _per_dtc(vehicle, 0x92).items():
+                results = [_test_result(r) for r in rows if r["event"] == "TestResults"]
+                per[responder] = {"results": results}
+            return _test_results(vehicle, per)
+        if mid is not None and mid & 0x1F == 0:
+            for responder, a in vehicle.request(bytes([0x06, mid]), mid).items():
+                if positive(a.data, 0x06):
+                    rows = _rows(vehicle, responder, a.data)
+                    per[responder] = {
+                        "supported": [r["supported"] for r in rows if r.get("supported")]
+                    }
+            return _result(vehicle, per, mid=f"0x{mid:02X}")
+        mids = _bitmap_walk(vehicle, 0x06) if mid is None else None
+        wanted = sorted({m for ids in mids.values() for m in ids}) if mids is not None else [mid]
+        for m in wanted:
+            for responder, a in vehicle.request(bytes([0x06, m]), m).items():
+                if positive(a.data, 0x06) and (mids is None or m in mids.get(responder, ())):
+                    rows = _rows(vehicle, responder, a.data)
+                    per.setdefault(responder, {"results": []})["results"].extend(
+                        _test_result(r)
+                        for r in rows
+                        if r["event"] == "TestResults" and r.get("uasid") is not None
+                    )
+    return _test_results(vehicle, per)
+
+
+def _test_results(vehicle: Vehicle, per: dict[int, dict[str, Any]]) -> dict[str, Any]:
+    if not per:
+        return {"status": "success", "protocol": vehicle.protocol, "responders": {}, "note":
+                "no ECU reports test results"}  # fmt: skip
+    return _result(vehicle, per)
+
+
+def _ratio(row: dict) -> dict[str, Any]:
+    return {k: row[k] for k in ("numerator", "denominator", "ratio")}
+
+
+def in_use_ratios(vehicle: Vehicle, ecu: int | None = None) -> dict[str, Any]:
+    """In-use monitor performance: general denominator, ignition cycles and each monitor's
+    numerator / denominator (09 08 spark, 09 0B compression; J1979-2: 22 F808 / F80B), and on
+    J1979-2 each DTC's (19 1A 91, then 19 06 DTC 91; CCR 1968.2 (d)(5.1.3), (g)(5.1))."""
+    with vehicle.busy("in_use_ratios", ecu):
+        protocol = ensure(vehicle)
+        per: dict[int, dict[str, Any]] = {}
+        for info in (0x08, 0x0B):
+            if protocol == UDS:
+                did = DID_INFO + info
+                payload, sid, pid = b"\x22" + did.to_bytes(2, "big"), 0x22, did
+            else:
+                payload, sid, pid = bytes([0x09, info]), 0x09, info
+            for responder, a in vehicle.request(payload, pid).items():
+                if not positive(a.data, sid):
+                    continue
+                for row in _rows(vehicle, responder, a.data):
+                    if row["event"] != "InUse" or row.get("monitor") is None:
+                        continue
+                    entry = per.setdefault(responder, {})
+                    entry["general_denominator"] = row["general_denominator"]
+                    entry["ignition_cycles"] = row["ignition_cycles"]
+                    entry.setdefault("monitors", {})[row["monitor"]] = _ratio(row)
+        if protocol == UDS:
+            for responder, rows in _per_dtc(vehicle, 0x91).items():
+                for row in rows:
+                    if row["event"] == "InUse" and row.get("dtc"):
+                        per.setdefault(responder, {}).setdefault("dtcs", {})[row["dtc"]] = _ratio(
+                            row
+                        )
+    if not per:
+        return {"status": "success", "protocol": vehicle.protocol, "responders": {}, "note":
+                "no ECU reports in-use performance ratios"}  # fmt: skip
+    return _result(vehicle, per)
 
 
 def clear_dtcs(vehicle: Vehicle, confirm: bool, ecu: int | None = None) -> dict[str, Any]:
