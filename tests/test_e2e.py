@@ -204,6 +204,19 @@ def test_detect_with_an_ecu_asks_it_on_its_own_ids_and_bitrate(monkeypatch, ecu,
         sniffer.close()
 
 
+def test_a_failed_reopen_reconnects(car):
+    """A bitrate switch that closed the bus and failed to reopen it: the worker reconnects."""
+    vehicle, _ = car
+    with vehicle.lock:
+        vehicle.link.close()
+    deadline = time.monotonic() + 6
+    while (
+        vehicle.reopens == 0 or vehicle.state != State.CONNECTED
+    ) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert scan.read_pids(vehicle, [0x0C])["responders"]
+
+
 @pytest.mark.parametrize("car", [({"extended": True}, {})], indirect=True)
 def test_detect_finds_29_bit(car):
     vehicle, _ = car

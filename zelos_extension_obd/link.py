@@ -183,7 +183,9 @@ class CanLink:
                 logger.debug("[%s] bus shutdown: %s", self.name, e)
 
     def health(self) -> str | None:
-        """Why the open bus is unusable, or None."""
+        """Why the bus is unusable (or not open: a reopen that failed), or None."""
+        if self.bus is None:
+            return "bus not open"
         if self._errors.error:
             return self._errors.error
         dead = [
