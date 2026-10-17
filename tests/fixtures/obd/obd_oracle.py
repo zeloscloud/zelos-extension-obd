@@ -203,6 +203,7 @@ PIDS = {
     0x4C: (1, lambda d: {"CommandedThrottleActuator": _pct(d[0])}),
     0x52: (1, lambda d: {"EthanolPercent": _pct(d[0])}),
     0x53: (2, lambda d: {"AbsoluteEvapVaporPressure": _u(d) / 200}),
+    0x5B: (1, lambda d: {"HybridBatteryLife": _pct(d[0])}),
     0x5E: (2, lambda d: {"FuelRate": _u(d) / 20}),
     0x62: (1, lambda d: {"ActualTorque": d[0] - 125}),
     0x63: (2, lambda d: {"ReferenceTorque": _u(d)}),
@@ -261,3 +262,81 @@ def vehicle_info(body: bytes) -> dict | None:
     # ASCII items are NUL padded; an ECU name pads its acronym too (`ECM\0-EngineControl`)
     text = [c.hex().upper() if kind == "h" else c.replace(b"\0", b"").rstrip(b" ").decode("ascii") for c in chunks]
     return {name: ",".join(text), "count": body[1]}
+
+
+# ─── Monitoring: $06 / $19 06 0x92, $09 08 / 0B / $19 06 0x91 ─────────────────
+
+# UASID: (signed, scale, unit), the ones the vectors use (J1979-DA via J1699-3 /
+# python-OBD; values only).
+UAS = {
+    0x0A: (False, 0.122, "mV"),
+    0x10: (False, 1, "ms"),
+    0x17: (False, 0.01, "kPa"),
+    0x20: (False, 1 / 256, None),
+    0x24: (False, 1, None),
+    0x8C: (True, 0.01, "V"),
+}
+
+
+def _uas(uasid: int, raw: bytes) -> float | None:
+    if uasid not in UAS:
+        return None
+    signed, scale, _ = UAS[uasid]
+    return int.from_bytes(raw, "big", signed=signed) * scale
+
+
+def _result(uasid: int, rec: bytes) -> dict:
+    tv, lo, hi = (rec[i : i + 2] for i in (0, 2, 4))
+    signed = UAS.get(uasid, (uasid >= 0x80,))[0]
+    n = [int.from_bytes(x, "big", signed=signed) for x in (tv, lo, hi)]
+    return {
+        "uasid": uasid,
+        "value": _uas(uasid, tv),
+        "min": _uas(uasid, lo),
+        "max": _uas(uasid, hi),
+        "unit": UAS.get(uasid, (0, 0, None))[2],
+        "pass": n[1] <= n[0] <= n[2],  # CCR 1968.2 (g)(4.5.4)(B): a limit passes
+    }
+
+
+def results_06(body: bytes) -> list[dict] | None:
+    """$46 on CAN: 9-byte records `MID TID UASID TV MIN MAX` (J1699-3 SID6)."""
+    if not body or len(body) % 9:
+        return None
+    return [
+        {"mid": r[0], "tid": r[1]} | _result(r[2], r[3:9]) for r in (body[i : i + 9] for i in range(0, len(body), 9))
+    ]
+
+
+# J1699-3 IPT order after OBDCOND, IGNCNTR (one name per COMP/COND pair).
+IPT_SPARK = ["CAT1", "CAT2", "O2S1", "O2S2", "EGR", "AIR", "EVAP", "SO2S1", "SO2S2", "AFRI1", "AFRI2", "PF1", "PF2"]
+IPT_COMPRESSION = ["HCCAT", "NCAT", "NADS", "PM", "EGS", "EGR", "BP", "FUEL"]
+NODI = {0x08: (16, 20, 28), 0x0B: (16, 18)}
+
+
+def in_use(infotype: int, counters: bytes) -> dict | None:
+    """$49 08 / 0B data (no NODI byte): OBDCOND, IGNCNTR, then pairs."""
+    n = len(counters) // 2
+    if len(counters) % 2 or n not in NODI.get(infotype, ()):
+        return None
+    c = [_u(counters[i : i + 2]) for i in range(0, len(counters), 2)]
+    names = IPT_SPARK if infotype == 0x08 else IPT_COMPRESSION
+    return {"OBDCOND": c[0], "IGNCNTR": c[1], **{names[i]: (c[2 + 2 * i], c[3 + 2 * i]) for i in range((n - 2) // 2)}}
+
+
+def dtc3(raw: bytes) -> str:
+    return f"{dtc(_u(raw[:2]))}-{raw[2]:02X}"
+
+
+def ext_record(body: bytes) -> dict | None:
+    """$59 06 after the sub-function: DTC(3) status record data; J1979-2 0x91
+    numerator(2) denominator(2), 0x92 UASID TV MIN MAX per result (bodies are
+    J1979-2's, not public: the shape the servers here use)."""
+    if len(body) < 5:
+        return None
+    code, record, data = dtc3(body[:3]), body[4], body[5:]
+    if record == 0x91 and len(data) == 4:
+        return {"dtc": code, "numerator": _u(data[:2]), "denominator": _u(data[2:])}
+    if record == 0x92 and data and len(data) % 7 == 0:
+        return {"dtc": code, "results": [_result(data[i], data[i + 1 : i + 7]) for i in range(0, len(data), 7)]}
+    return None
