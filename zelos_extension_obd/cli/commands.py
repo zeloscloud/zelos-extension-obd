@@ -1,0 +1,231 @@
+"""Shell subcommands: one request sequence on one vehicle, printed as JSON (exit 1 on error).
+
+They mirror the actions; `clear` needs `--yes` to clear, as `clear_dtcs` needs `confirm`.
+"""
+
+from __future__ import annotations
+
+import functools
+import json
+import logging
+import signal
+import threading
+from collections.abc import Callable
+from typing import Any
+
+import rich_click as click
+
+from .. import actions, scan
+from ..constants import ADDRESSING, ADVANCED_DEFAULTS, CLI_INTERFACES, INTERFACES, PROTOCOLS
+from ..demo import DemoVehicle
+from ..demo.vehicle import PROFILES
+from .app import cli_vehicle
+
+logger = logging.getLogger(__name__)
+
+
+def _label(ctx: click.Context, param: click.Parameter, value: str) -> str:
+    if value in INTERFACES:
+        return value
+    label = CLI_INTERFACES.get(value.lower())
+    if label is None:
+        raise click.BadParameter(f"one of {', '.join(CLI_INTERFACES)}, or a settings label")
+    return label
+
+
+def _options(func: Callable[..., Any]) -> Callable[..., Any]:
+    options = [
+        click.option("--interface", default="socketcan", show_default=True, callback=_label,
+                     help="socketcan, zelos-ssh-socketcan, pcan, kvaser, vector, slcan, other "
+                     "(--config-json: gs_usb, ixxat, ...), demo, doip"),
+        click.option("--channel", default="can0", show_default=True, help="CAN channel/device"),
+        click.option("--bitrate", type=int, default=None, help="pcan/kvaser/vector/slcan: bit/s"),
+        click.option("--addressing", type=click.Choice(ADDRESSING), default="11-bit",
+                     show_default=True),
+        click.option("--protocol", type=click.Choice(PROTOCOLS), default="auto", show_default=True,
+                     help="auto: 01 00, then 22 F400 (J1979-2)"),
+        click.option("--config-json", default=None, help="other: python-can bus kwargs, JSON"),
+        click.option("--remote-host", default=None, help="zelos-ssh-socketcan: SSH host"),
+        click.option("--ssh-user", default=None, help="zelos-ssh-socketcan: SSH user"),
+        click.option("--host", default="", help="doip: the DoIP entity's IP or hostname"),
+        click.option("--port", type=int, default=13400, show_default=True, help="doip: TCP port"),
+        click.option("--tester-address", default="0E80", show_default=True,
+                     help="doip: our logical address, hex"),
+        click.option("--ecu-address", default="E400", show_default=True,
+                     help="doip: target address, hex (E400: every ECU, functional)"),
+        click.option("--discover", is_flag=True, help="doip: vehicle identification first"),
+        click.option("--p2", type=float, default=ADVANCED_DEFAULTS["p2_timeout"],
+                     show_default=True, help="Seconds to wait for the next answer"),
+    ]  # fmt: skip
+    for option in reversed(options):
+        func = option(func)
+    return func
+
+
+def _settings(kw: dict[str, Any]) -> dict[str, Any]:
+    settings: dict[str, Any] = {
+        "interface": kw.pop("interface"),
+        "addressing": kw.pop("addressing"),
+        "protocol": kw.pop("protocol"),
+    }
+    channel, bitrate, config_json = kw.pop("channel"), kw.pop("bitrate"), kw.pop("config_json")
+    remote, user = kw.pop("remote_host"), kw.pop("ssh_user")
+    doip = {k: kw.pop(k) for k in ("host", "port", "tester_address", "ecu_address", "discover")}
+    label = settings["interface"]
+    if label == "DoIP":
+        settings["doip"] = doip
+    elif label == "SocketCAN over SSH":
+        if not remote:
+            raise click.UsageError("--interface zelos-ssh-socketcan needs --remote-host")
+        settings.update(remote_host=remote, remote_channel=channel)
+        if user:
+            settings["ssh_user"] = user
+    elif label == "Other (python-can)":
+        if not config_json:
+            raise click.UsageError("--interface other needs --config-json")
+        settings["config_json"] = config_json
+    elif label != "Demo":
+        settings["channel"] = channel
+    if bitrate:
+        settings["bitrate"] = bitrate
+    return settings
+
+
+def command(func: Callable[..., dict[str, Any]]) -> Callable[..., None]:
+    """A subcommand body `func(vehicle, **its options)` on the CLI vehicle."""
+
+    @functools.wraps(func)
+    def run(**kwargs: Any) -> None:
+        advanced = {**ADVANCED_DEFAULTS, "p2_timeout": kwargs.pop("p2")}
+        settings = _settings(kwargs)
+        try:
+            with cli_vehicle(settings, advanced) as vehicle:
+                result = actions.guarded(func)(vehicle, **kwargs)
+        except (ValueError, ConnectionError) as e:
+            result = {"status": "error", "error": str(e)}
+        click.echo(json.dumps(result, indent=2))
+        if result.get("status") == "error":
+            raise SystemExit(1)
+
+    return _options(run)
+
+
+@click.command()
+@command
+def detect(vehicle) -> dict:
+    """Transmits. ISO 15765-4 initialization: 01 00 on 11/29-bit at 500k then 250k.
+
+    \b
+    Example:
+        main.py detect --interface pcan --channel PCAN_USBBUS1
+    """
+    return scan.detect(vehicle)
+
+
+@click.command()
+@click.option("--service", type=click.Choice(["01", "02", "09"]), default="01", show_default=True)
+@command
+def pids(vehicle, service: str) -> dict:
+    """Transmits. Supported PIDs (or freeze frame PIDs, infotypes) per ECU."""
+    return scan.supported_pids(vehicle, int(service, 16))
+
+
+@click.command()
+@click.option("--pids", "names", required=True, help="Names or hex, comma separated")
+@command
+def read(vehicle, names: str) -> dict:
+    """Transmits. Current data of the PIDs, decoded.
+
+    \b
+    Example:
+        main.py read --interface demo --pids EngineRPM,VehicleSpeed,05
+    """
+    return scan.read_pids(vehicle, scan.parse_pids(names))
+
+
+@click.command()
+@command
+def status(vehicle) -> dict:
+    """Transmits. MIL, DTC count and readiness monitors per ECU."""
+    return scan.monitor_status(vehicle)
+
+
+@click.command()
+@command
+def dtcs(vehicle) -> dict:
+    """Transmits. Stored, pending and permanent DTCs per ECU."""
+    return scan.read_dtcs(vehicle)
+
+
+@click.command()
+@command
+def freeze(vehicle) -> dict:
+    """Transmits. Freeze frame 0 per ECU."""
+    return scan.freeze_frame(vehicle)
+
+
+@click.command()
+@command
+def info(vehicle) -> dict:
+    """Transmits. VIN, CALID, CVN and ECU name per ECU."""
+    return scan.vehicle_info(vehicle)
+
+
+@click.command()
+@click.option("--mid", default="00", show_default=True, help="Monitor id, hex")
+@command
+def tests(vehicle, mid: str) -> dict:
+    """Transmits. On-board monitoring test results (06), raw."""
+    return scan.test_results(vehicle, int(mid, 16))
+
+
+@click.command()
+@click.option("--yes", is_flag=True, help="Clear for real; without it nothing is cleared")
+@command
+def clear(vehicle, yes: bool) -> dict:
+    """Clear DTCs, freeze frames and readiness on every ECU (04 / 14 FFFF33).
+
+    Without --yes: lists what would be cleared and clears nothing (status refused,
+    exit 0). Permanent DTCs remain.
+
+    \b
+    Example:
+        main.py clear --interface demo           # dry run
+        main.py clear --interface demo --yes
+    """
+    return scan.clear_dtcs(vehicle, yes)
+
+
+@click.command("demo-ecu")
+@click.option("--interface", default=None, help="python-can interface; default: in-process bus")
+@click.option("--channel", default="obd-demo", show_default=True)
+@click.option("--bitrate", type=int, default=None)
+@click.option("--extended", is_flag=True, help="29-bit: 0x18DAF110 + n")
+@click.option("--responders", type=click.IntRange(1, 3), default=3, show_default=True,
+              help="1: 0x7E8 DC-DC only (the bench node's contract)")  # fmt: skip
+@click.option("--uds-only", is_flag=True, help="Answer J1979-2 (OBDonUDS) only")
+def demo_ecu(interface, channel, bitrate, extended, responders, uds_only) -> None:
+    """Run the demo vehicle: an engine ECU and two DC-DC converters answering OBD-II.
+
+    \b
+    Example:
+        uv run main.py demo-ecu --interface socketcan --channel vcan0
+    """
+    profiles = PROFILES[:responders] if responders > 1 else (("dcdc", False),)
+    stop = threading.Event()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, lambda *_: stop.set())
+    try:
+        demo = DemoVehicle(channel, interface, bitrate, extended, profiles, uds_only).start()
+    except Exception as e:
+        raise click.ClickException(f"cannot open CAN {interface} {channel}: {e}") from e
+    if interface is None:
+        logger.warning("The zelos-can virtual bus is in-process: other programs cannot reach it")
+    try:
+        while not stop.wait(0.5):
+            pass
+    finally:
+        demo.stop()
+
+
+COMMANDS = [detect, pids, read, status, dtcs, freeze, info, tests, clear, demo_ecu]
