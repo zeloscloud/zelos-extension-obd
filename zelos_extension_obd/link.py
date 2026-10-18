@@ -2,8 +2,8 @@
 
 `CanLink` owns a bus, its notifier and one ISO-TP stack per responder (multi-frame
 answers, flow control on the responder's physical id). A stack hears its responder only
-while one of our requests that it may answer is outstanding: no flow control to an answer
-meant for another tester. `DoipLink` owns one DoIP
+while one of our requests that it may answer is outstanding (`zelos_can.isotp.listening`):
+no flow control to an answer meant for another tester. `DoipLink` owns one DoIP
 connection; a request to the functional address is answered from each ECU's logical
 address. Both return (responder, answer, seconds from the request) per final answer;
 response-pending answers (NRC 0x78) are waited through, `max_pending` of them at most.
@@ -14,15 +14,12 @@ ISO 15765-4:2005 7: a diagnostic frame with DLC below 8 is ignored on receive.
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import time
-from collections.abc import Container, Iterator
 from dataclasses import dataclass
 from typing import Any
 
 import can
-import isotp
 from zelos_can import doip
 from zelos_can import isotp as diag
 
@@ -79,16 +76,11 @@ class _Errors(can.Listener):
         self.error = self.error or f"CAN receive failed: {exc}"
 
 
-class _Stack(isotp.NotifierBasedCanStack):
-    """ISO-TP stack that ignores classic frames with DLC below 8, and every frame while its
-    responder is not in `link.listening`."""
-
-    def __init__(self, link: CanLink, responder: int, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self.link, self.responder = link, responder
+class _Stack(diag.QuietStack):
+    """A stack silent between our requests that ignores classic frames with DLC below 8."""
 
     def _on_message_received(self, msg: can.Message) -> None:
-        if self.responder in self.link.listening and not short(msg):
+        if not short(msg):
             super()._on_message_received(msg)
 
 
@@ -111,8 +103,6 @@ class CanLink:
         self.stacks: dict[int, Any] = {}
         #: Responders seen; on 29-bit, those with a stack.
         self.known: set[int] = set()
-        #: Responders our outstanding request may be answered from; read by the notifier.
-        self.listening: Container[int] = ()
         self._errors = _Errors()
 
     @property
@@ -149,7 +139,7 @@ class CanLink:
             if rx in self.stacks:
                 continue
             address = diag.address(diag.request_id(rx, self.extended), rx, self.extended)
-            stack = _Stack(self, rx, self.bus, self.notifier, address=address, params=self.params)
+            stack = _Stack(self.bus, self.notifier, address=address, params=self.params)
             stack.start()
             self.stacks[rx] = stack
 
@@ -193,15 +183,6 @@ class CanLink:
         ]
         return f"ISO-TP stack for 0x{dead[0]:X} stopped (CAN send failed?)" if dead else None
 
-    @contextlib.contextmanager
-    def _listen(self, responders: Container[int]) -> Iterator[None]:
-        """Stacks of `responders` hear their frames (and send flow control) in the block."""
-        self.listening = responders
-        try:
-            yield
-        finally:
-            self.listening = ()
-
     def _drain(self) -> None:
         for stack in self.stacks.values():
             while stack.recv(block=False) is not None:  # late answers to an earlier request
@@ -215,7 +196,7 @@ class CanLink:
         arrivals = _Arrivals(self.responders, self.extended)
         self.notifier.add_listener(arrivals)
         start = time.monotonic()
-        with self._listen(self.responders):
+        with diag.listening(self.stacks.values()):
             try:
                 got = diag.functional_request(
                     self.bus, self.notifier, payload,
@@ -245,7 +226,7 @@ class CanLink:
         arrivals = _Arrivals((responder,), self.extended)
         self.notifier.add_listener(arrivals)
         start = time.monotonic()
-        with self._listen((responder,)):
+        with diag.listening([stack]):
             try:
                 stack.send(payload)
                 sdu, deadline = None, start + self.window

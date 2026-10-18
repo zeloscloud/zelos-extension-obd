@@ -22,7 +22,7 @@ dependencies = [
     "rich-click>=1.8.0",
     # CAN bus runtime (`zelos_can.bus`), the diagnostics transports `zelos_can.isotp` and
     # `zelos_can.doip` (extra `diag`) and the PID catalogue `zelos_can.obd`.
-    # TODO floor: the first zelos-can release with `zelos_can.isotp`, `zelos_can.doip` and `zelos_can.obd`.
+    # TODO floor: the first zelos-can release with `zelos_can.isotp.QuietStack`.
     "zelos-can[python-can,diag]>=0.0.11a5",
     # NRC names in results.
     "udsoncan>=1.21.0",
