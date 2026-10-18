@@ -239,7 +239,7 @@ class Responder:
     def _dcdc(self) -> Profile:
         """The firmware's DC-DC: 0x1F run time, 0x42 module voltage, 0x46 ambient
         temperature, 0x5B pack life; comprehensive components only; DTCs P0A94, P0A09,
-        P0A08, U0111."""
+        P0A08, U0111 (and P062F once the firmware's flash store fails; no flash here)."""
 
         def volts() -> float:
             return 13.8 + 0.02 * math.sin(self._uptime())
