@@ -23,7 +23,7 @@ import isotp
 import pytest
 
 from zelos_testing.dcdc import LIMITS, LIMITS_PERIOD_S, STATUS, BmsLimits
-from zelos_testing.frames import Periodic, bound, collect, count, play_unless_present, until
+from zelos_testing.frames import Periodic, bound, collect, count, play_unless_present, until, wait_until
 from zelos_testing.uds import FUNCTIONAL, PHYSICAL, RESPONSE
 
 # Service 0x01: what the node advertises, and each PID's data length.
@@ -143,13 +143,6 @@ def no_bms(bus):
 def cycles(bus, n: int):
     after = time.time()
     until(bus, lambda f: sum(m.timestamp > after for m in f) >= n, ids=[STATUS.frame_id])
-
-
-def wait_until(done, node_s: float, step_s: float = 0.1):
-    end = time.monotonic() + bound(node_s)
-    while not done():
-        assert time.monotonic() < end, f"not done within {node_s} s"
-        time.sleep(step_s)
 
 
 def bms(bus) -> Periodic:
