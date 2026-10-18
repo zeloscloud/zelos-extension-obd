@@ -49,6 +49,9 @@ P2_CAN = 0.050
 #: J1979-2 NRCs a server may not send: 0x13 on any OBD request, 0x21 on $22 (13 CCR 1968.2
 #: (g)(3.4.2)(A)-(B)); 0x78 at most once per request ((g)(3.4.2)(C)-(F)).
 NRC_LENGTH, NRC_BUSY = 0x13, 0x21
+#: Response-pending waited through per request and responder, legacy and J1979-2 alike
+#: (CCR 1968.2 (g)(3.4.2); J1699-3 fails a second): a second ends the wait.
+MAX_PENDING = 1
 #: Init requests: 0x21 there restarts the init (ISO 15765-4:2005 4.2.2 e).
 INIT_REQUESTS = (b"\x01\x00", b"\x22\xf8\x10")
 #: Bus kwargs `config_json` may not set: the zelos-can factory merges it over the bitrate.
@@ -250,7 +253,7 @@ class Vehicle:
 
     def request(self, payload: bytes, pid: int = 0) -> dict[int, Answer]:
         """One request (hold `busy`), functional or to `target`; each responder's final answer."""
-        target, uds = self.target, self.protocol == "uds"
+        target = self.target
         address = self.link.address
         if target is not None:
             address = target
@@ -259,12 +262,11 @@ class Vehicle:
         if self.trace:
             self.trace.tx(payload[0], pid, address, payload[1:])
         self.counts["requests"] += 1
-        max_pending = 1 if uds else None
         try:
             if target is None:
-                answers = self.link.functional(payload, max_pending)
+                answers = self.link.functional(payload, MAX_PENDING)
             else:
-                answers = self.link.physical(target, payload, max_pending)
+                answers = self.link.physical(target, payload, MAX_PENDING)
         except Exception:
             self.counts["errors"] += 1
             raise
@@ -287,7 +289,7 @@ class Vehicle:
             self.note(f"{who} answered {sid:02X} after {a.elapsed_s * 1e3:.0f} ms (P2CAN 50 ms)")
         if a.pending > 1:
             self.note(f"{who} sent response-pending {a.pending} times to {sid:02X} "
-                      "(J1979-2: at most once)")  # fmt: skip
+                      "(at most once): stopped waiting")  # fmt: skip
         if not nrc or nrc == PENDING or (nrc == NRC_BUSY and payload in INIT_REQUESTS):
             return
         if 0x01 <= sid <= 0x0A and not (sid == 0x04 and nrc == 0x22):

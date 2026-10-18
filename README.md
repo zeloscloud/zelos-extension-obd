@@ -58,7 +58,7 @@ A bus is one vehicle: two entries on one interface and channel are refused. PCAN
 | `prefix` | `OBD` | Trace source every vehicle publishes under; cleared, each vehicle has its own |
 | `log_level` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `p2_timeout` | `0.1` | Seconds to wait for the first, and each further, ECU's answer (ISO P2CAN is 0.05). Raise over SSH or a slow gateway |
-| `p2_star_timeout` | `5.0` | Seconds after each response-pending (NRC 0x78) answer |
+| `p2_star_timeout` | `5.0` | Seconds to wait after a response-pending (NRC 0x78) answer; a second 0x78 from that ECU ends the wait with a `compliance` note |
 | `isotp_padding` | `204` (0xCC) | Padding byte; every frame is 8 bytes |
 | `debug_frames` | off | Log ISO-TP frames and DoIP messages at `DEBUG` |
 

@@ -5,6 +5,7 @@ import itertools
 import json
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -353,3 +354,56 @@ def test_legacy_and_j1979_2_give_the_same_values():
         first = next(f for f in uds["frames"][r]["frames"]
                      if f["dtc"] == f"{frame['dtc']}-00" and f["record"] == "first")  # fmt: skip
         assert first["values"] == frame["values"], r
+
+
+class _PendingForever(can.Listener):
+    """A legacy ECU on 0x7E8: 01 00 lists PID 0C; 01 0C gets 0x78 every 0.5 s, forever."""
+
+    def __init__(self, channel: str) -> None:
+        self.bus = can.Bus(interface="virtual", channel=channel, receive_own_messages=False)
+        self.done = threading.Event()
+        self.notifier = can.Notifier(self.bus, [self])
+
+    def _send(self, data: bytes) -> None:
+        self.bus.send(
+            can.Message(arbitration_id=0x7E8, is_extended_id=False, data=data.ljust(8, b"\xaa"))
+        )
+
+    def _pending(self) -> None:
+        while not self.done.wait(0.5):
+            self._send(b"\x03\x7f\x01\x78")
+
+    def on_message_received(self, msg: can.Message) -> None:
+        if msg.arbitration_id != 0x7DF:
+            return
+        if bytes(msg.data[:3]) == b"\x02\x01\x00":
+            self._send(b"\x06\x41\x00\x00\x10\x00\x00")
+        elif bytes(msg.data[:3]) == b"\x02\x01\x0c":
+            self._send(b"\x03\x7f\x01\x78")
+            threading.Thread(target=self._pending, daemon=True).start()
+
+    def close(self) -> None:
+        self.done.set()
+        self.notifier.stop()
+        self.bus.shutdown()
+
+
+def test_a_second_response_pending_ends_the_wait():
+    """Legacy as J1979-2: one 0x78 waited through (P2*), a second ends the wait with a note,
+    the vehicle lock is released (CCR 1968.2 (g)(3.4.2))."""
+    channel = f"obd-e2e-{next(_channels)}"
+    ecu = _PendingForever(channel)
+    config = json.dumps({"interface": "virtual", "channel": channel})
+    vehicle = _open(Vehicle("car", Interface.OTHER, {"config_json": config, "protocol": "legacy"},
+                            dict(ADVANCED_DEFAULTS)))  # fmt: skip
+    try:
+        start = time.monotonic()
+        got = scan.read_pids(vehicle, [0x0C])
+        assert time.monotonic() - start < ADVANCED_DEFAULTS["p2_star_timeout"] + 1
+        assert got["responders"]["07e8"]["nrc"] == 0x78, got
+        assert any("response-pending 2 times" in n for n in got["compliance"]), got
+        assert scan.supported_pids(vehicle)["status"] == "success"  # the next action runs
+    finally:
+        vehicle.stop()
+        vehicle.join(3)
+        ecu.close()
