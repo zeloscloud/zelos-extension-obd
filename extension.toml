@@ -10,7 +10,7 @@ homepage = "https://github.com/zeloscloud/zelos-extension-obd"
 keywords = ["obd", "obd-ii", "j1979", "obdonuds", "automotive", "diagnostics", "can", "doip"]
 categories = ["Automotive", "Diagnostics"]
 
-icon = "assets/icon.svg"
+icon = "assets/icon.png"
 readme = "README.md"
 
 [zelos]
