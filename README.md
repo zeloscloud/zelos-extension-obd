@@ -51,6 +51,8 @@ A bus is one vehicle: two entries on one interface and channel are refused. PCAN
 | `tcp_timeout` | `2.0` | Seconds for the TCP connect and each acknowledgement |
 | `discover` | off | Vehicle identification (UDP 13400) first; the answer shows in `get_status` |
 
+The TCP connection opens at start and is held for the session, so one of the entity's tester sockets stays in use while the extension runs.
+
 ### Advanced settings
 
 | Setting | Default | Description |
