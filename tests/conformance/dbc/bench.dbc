@@ -32,7 +32,7 @@ NS_ :
 
 BS_:
 
-BU_: VCU BMS DCDC
+BU_: VCU BMS DCDC SIG
 
 BO_ 257 VCU_Command: 4 VCU
  SG_ RequestedMode : 0|8@1+ (1,0) [0|3] "" BMS,DCDC
@@ -67,6 +67,12 @@ BO_ 768 DCDC_Status: 8 DCDC
  SG_ DerateActive : 56|1@1+ (1,0) [0|1] "" VCU,BMS
  SG_ Counter : 57|7@1+ (1,0) [0|127] "" VCU,BMS
 
+BO_ 2032 Waveform: 8 SIG
+ SG_ FreqHz : 0|16@1+ (0.01,0) [0|655.35] "Hz" VCU
+ SG_ Sine : 16|16@1- (0.001,0) [-1|1] "" VCU
+ SG_ Square : 32|16@1- (0.001,0) [-1|1] "" VCU
+ SG_ Sawtooth : 48|16@1- (0.001,0) [-1|1] "" VCU
+
 CM_ BU_ VCU "Vehicle control unit. Commands the operating mode and carries the bus heartbeat.";
 CM_ BU_ BMS "Battery management system. Reports pack state and publishes the current limits the DC-DC must respect.";
 CM_ BU_ DCDC "DC-DC converter. Steps the high-voltage pack down to the 12 V rail, within the BMS current limit.";
@@ -82,6 +88,7 @@ CM_ SG_ 513 AuxCurrentLimit "Pack current the DC-DC converter may draw. The BMS 
 CM_ SG_ 768 InputCurrent "Current drawn from the high-voltage pack.";
 CM_ SG_ 768 DerateActive "Set when the converter is limiting output because of temperature.";
 
+CM_ BO_ 2032 "Signal generator: one phase, chirped 1 to 100 Hz over 20 s, as sine, square and sawtooth. Lowest-priority ID on the bus.";
 BA_DEF_ BO_ "GenMsgCycleTime" INT 0 10000;
 BA_DEF_DEF_ "GenMsgCycleTime" 0;
 BA_ "GenMsgCycleTime" BO_ 257 100;
@@ -89,6 +96,7 @@ BA_ "GenMsgCycleTime" BO_ 512 100;
 BA_ "GenMsgCycleTime" BO_ 513 100;
 BA_ "GenMsgCycleTime" BO_ 514 500;
 BA_ "GenMsgCycleTime" BO_ 768 50;
+BA_ "GenMsgCycleTime" BO_ 2032 2;
 
 VAL_ 257 RequestedMode 0 "Standby" 1 "Drive" 2 "Charge" 3 "Fault" ;
 VAL_ 512 ContactorState 0 "Open" 1 "Precharge" 2 "Closed" 3 "Fault" ;

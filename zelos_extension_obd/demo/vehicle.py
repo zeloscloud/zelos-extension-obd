@@ -615,9 +615,8 @@ class Responder:
                 _need(data is not None, NRC_RANGE)
                 return b"\x59\x06" + req[2:5] + bytes([d.status, req[5]]) + data  # type: ignore[union-attr, operator]
             if kind == 0x1A:  # the DTCs that support record 0x91 / 0x92; 0x31 if none
-                _need(
-                    len(req) >= 3 and req[2] in (RECORD_IUMPR, RECORD_TEST_RESULTS), NRC_SUBFUNCTION
-                )
+                _need(len(req) >= 3, NRC_LENGTH)  # ISO 14229-1 NRC order: length first
+                _need(req[2] in (RECORD_IUMPR, RECORD_TEST_RESULTS), NRC_SUBFUNCTION)
                 _need(len(req) == 3, NRC_LENGTH)
                 listed = [
                     d for d in self.profile.dtcs if self._ext_record(d.code, req[2]) is not None

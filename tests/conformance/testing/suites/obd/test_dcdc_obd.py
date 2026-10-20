@@ -418,6 +418,8 @@ def test_no_test_results_or_in_use_ratios_either_way(scan):
         assert scan.request(request, functional=False, timeout_s=bound(0.3)) is None, request.hex()
     for did in (b"\xf4\x41", b"\xf8\x08"):
         assert scan.request(b"\x22" + did, functional=False) == b"\x7f\x22\x31", did.hex()
+    # No record at all: the length first, in ISO 14229-1's NRC order.
+    assert scan.request(b"\x19\x1a", functional=False) == b"\x7f\x19\x13"
     for record in (0x91, 0x92):
         assert scan.request(bytes([0x19, 0x1A, record]), functional=False) == b"\x7f\x19\x31"
         assert scan.request(bytes([0x19, 0x1A, record]), timeout_s=bound(0.3)) is None
