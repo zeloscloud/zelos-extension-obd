@@ -106,6 +106,15 @@ wheels = [
 ]
 
 [[package]]
+name = "can-isotp"
+version = "2.0.7"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/79/29/5a4bfa625254686ee2e6ce4e54530956d62af6e995b0588916b4caae4dc3/can_isotp-2.0.7.tar.gz", hash = "sha256:4586ca62f8646da918df1d3ffd257c7e3532a4fbd138cebd8fe0777e3b94e361", size = 52548, upload-time = "2025-05-14T02:54:13.148Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e4/1e/f1b163783c90ccbad0227de267d899d7283b3174b89f1d66bb7c2a509808/can_isotp-2.0.7-py3-none-any.whl", hash = "sha256:28d155dec1c640bf32771fb4e271323d777158ab130372724a8b7b82aca66a7c", size = 34571, upload-time = "2025-05-14T02:54:11.805Z" },
+]
+
+[[package]]
 name = "canopen"
 version = "2.4.1"
 source = { registry = "https://pypi.org/simple" }
@@ -176,6 +185,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/68/bc/d36966de7304047a1001a7559fbf266c464bb5d8cc85464536ef8c9bcc32/distlib-0.4.4.tar.gz", hash = "sha256:ca4175b4ac7f71223cc30ed7248c45d2b38c2439d8ee6e498ab67ed63cf3508d", size = 621304, upload-time = "2026-10-16T13:56:34.203Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c1/2b/238f02a4927fa2e27aa995371d240a468b52e42eae44a678434aff736b38/distlib-0.4.4-py2.py3-none-any.whl", hash = "sha256:cf09d55b1e85a89576b036aeb71550bfd68320f3f21761ca329eadadad918638", size = 472099, upload-time = "2026-10-16T13:56:32.053Z" },
+]
+
+[[package]]
+name = "doipclient"
+version = "1.2.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d9/16/a5e0ffbf8ed7db9261a1abc7ba4829dfd76cf74bedc7af51a4bf17508172/doipclient-1.2.2.tar.gz", hash = "sha256:d591816ed38e66ecf348fd9fd99e1cc44fe57e14ed6fa3a1371c85996d98f4e9", size = 25849, upload-time = "2026-08-23T23:39:36.219Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e3/dc/4fca0581c24c0ec0446af8b53c229bf74ab756c17f0db430fa76249c25c7/doipclient-1.2.2-py3-none-any.whl", hash = "sha256:5169b732434f5c949d585b354c048ecbfdbad7a51e32192a852d1c451deac90f", size = 20460, upload-time = "2026-08-23T23:39:35.193Z" },
 ]
 
 [[package]]
@@ -787,22 +805,27 @@ wheels = [
 
 [[package]]
 name = "zelos-can"
-version = "0.0.11a10"
+version = "0.0.11a13"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "zelos-sdk" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ba/5a/78e41fe07ab14cdaf1037a2b29f89cf1bb12914cc3d6751ca4b1fffc33cb/zelos_can-0.0.11a10-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:a952b7005b1fc17a52ad8159ebc672ef758ea2634a05424c65600049103ae57d", size = 2804519, upload-time = "2026-10-14T19:34:02.703Z" },
-    { url = "https://files.pythonhosted.org/packages/ff/c9/7e66f1c16f9fd5d2dac55c2346448524e888bc157152de6fe364ec1aaed5/zelos_can-0.0.11a10-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:7324e395afe795c58cf205d5cd54ec1a9f12c90cc933796951034f008c90324c", size = 3627453, upload-time = "2026-10-14T19:34:04.245Z" },
-    { url = "https://files.pythonhosted.org/packages/29/46/c37a17c9c83058a9f6d517b62815cd36c71a8b1d11f4324bf9ab72e596db/zelos_can-0.0.11a10-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:f982012db2cae696b8c5dac1a936fe422e3e4d80580e4609a4d1733b707aedc7", size = 3970678, upload-time = "2026-10-14T19:34:05.558Z" },
-    { url = "https://files.pythonhosted.org/packages/85/20/92e33b6624b9541176c5a145a47b8e2d2599e19bde40151cdfac2561edf9/zelos_can-0.0.11a10-cp310-abi3-win_amd64.whl", hash = "sha256:15114191832ae58812fe80eb0f71499c2a12bf5c6bced619e5912a72ee92b786", size = 2977859, upload-time = "2026-10-14T19:34:07.615Z" },
+    { url = "https://files.pythonhosted.org/packages/f1/ed/c441d4abdf34334116d88b1244404f0fb060ccfc6c4091857fed78720f6e/zelos_can-0.0.11a13-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:c6416bf447300460f114d65888f8c52290bc830e238d7559ac405259cbe27cec", size = 3643784, upload-time = "2026-10-20T13:34:02.42Z" },
+    { url = "https://files.pythonhosted.org/packages/0c/f5/312ff478e0eb2488ec4576a78fc59dc180e37391de850db99ff4c2bfe35c/zelos_can-0.0.11a13-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:b0a2e7d5bab79c85497a5c34c94fbd010bf0fcb96f30e15ee6b3fa67a12373a4", size = 4704776, upload-time = "2026-10-20T13:34:04.031Z" },
+    { url = "https://files.pythonhosted.org/packages/b3/38/b12a072925cd5933458557d25c4df7e006970e4b1f55b0315b0ff4c9d48b/zelos_can-0.0.11a13-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:41de09baf8f82e9d71a51ba39bb1e0d7117863db7dc1e65879b48579ebf1f546", size = 5011722, upload-time = "2026-10-20T13:34:06.44Z" },
+    { url = "https://files.pythonhosted.org/packages/16/4f/a3c7917158f7c64e58493db229494b9d4b76a11b46906894b81524cd2ceb/zelos_can-0.0.11a13-cp310-abi3-win_amd64.whl", hash = "sha256:e99e8185e9a9ec602f73a34c7d3e6bce43a004d9b10305a0867bfa4a6d12a6cf", size = 3869814, upload-time = "2026-10-20T13:34:08.076Z" },
 ]
 
 [package.optional-dependencies]
+diag = [
+    { name = "can-isotp" },
+    { name = "canopen" },
+    { name = "doipclient" },
+    { name = "python-can", extra = ["serial"] },
+]
 python-can = [
     { name = "canopen" },
-    { name = "cantools" },
     { name = "python-can", extra = ["serial"] },
 ]
 
@@ -813,7 +836,7 @@ source = { editable = "." }
 dependencies = [
     { name = "rich-click" },
     { name = "udsoncan" },
-    { name = "zelos-can", extra = ["python-can"] },
+    { name = "zelos-can", extra = ["diag", "python-can"] },
     { name = "zelos-sdk" },
 ]
 
@@ -830,7 +853,7 @@ dev = [
 requires-dist = [
     { name = "rich-click", specifier = ">=1.8.0" },
     { name = "udsoncan", specifier = ">=1.21.0" },
-    { name = "zelos-can", extras = ["python-can", "diag"], specifier = ">=0.0.11a5" },
+    { name = "zelos-can", extras = ["python-can", "diag"], specifier = ">=0.0.11a13" },
     { name = "zelos-sdk", specifier = ">=0.0.12" },
 ]
 
