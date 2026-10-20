@@ -46,14 +46,6 @@ sim *ARGS="--interface socketcan --channel vcan0":
 sim-doip *ARGS="--host 127.0.0.1":
     uv run python tests/doip_entity.py {{ARGS}}
 
-# Vendor the OBD-II conformance suite from a zelos-examples checkout
-sync-conformance PATH:
-    uv run python tests/conformance/vendor.py {{PATH}}
-
-# Vendor the real-vehicle OBD-II traces and oracle from a zelos monorepo checkout
-sync-replay PATH:
-    uv run python tests/fixtures/obd/vendor.py {{PATH}}
-
 # Package for Zelos marketplace
 package:
     zelos extensions package .

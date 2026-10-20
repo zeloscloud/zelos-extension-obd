@@ -140,10 +140,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### Tests
 
-| Suite | Update | Check against upstream |
-|---|---|---|
-| `tests/conformance`: the zelos-examples OBD-II suite, on CAN and DoIP (`tests/doip_entity.py`) | `just sync-conformance <zelos-examples>` | `ZELOS_EXAMPLES=<zelos-examples> just test` |
-| `tests/test_replay.py`: real vehicles' traffic (`tests/fixtures/obd`, MIT, `LICENSES`) against an independent oracle | `just sync-replay <zelos-src>` | `ZELOS_SRC=<zelos-src> just test` |
+`just test`: sanity checks of the extension against its demo vehicle, on an in-process CAN bus and over DoIP (`tests/doip_entity.py`). OBD-II decoding is tested in zelos-can.
 
 ```bash
 just sim                       # demo on vcan0, Linux
