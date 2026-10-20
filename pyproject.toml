@@ -6,7 +6,7 @@ authors = [{ name = "Zelos", email = "info@zeloscloud.io" }]
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
-keywords = ["zelos", "extension"]
+keywords = ["zelos", "extension", "obd", "obd-ii", "j1979", "diagnostics", "automotive", "can", "doip"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -19,6 +19,12 @@ classifiers = [
 ]
 dependencies = [
     "zelos-sdk>=0.0.12",
+    "rich-click>=1.8.0",
+    # CAN bus runtime (`zelos_can.bus`), the diagnostics transports `zelos_can.isotp` and
+    # `zelos_can.doip` (extra `diag`) and the PID catalogue `zelos_can.obd`.
+    "zelos-can[python-can,diag]>=0.0.11a13",
+    # NRC names in results.
+    "udsoncan>=1.21.0",
 ]
 
 [project.urls]
@@ -29,9 +35,10 @@ Documentation = "https://docs.zeloscloud.io/extensions"
 
 [dependency-groups]
 dev = [
-    "pytest>=9.1.1",
-    "pre-commit>=4.6.2",
-    "ruff>=0.16.10",
+    "pytest>=8.4.2",
+    "pre-commit>=4.3.0",
+    "ruff>=0.14.2",
+    "jsonschema>=4.0.0",
 ]
 
 [build-system]

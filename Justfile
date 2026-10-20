@@ -38,6 +38,14 @@ test:
 dev:
     uv run python main.py
 
+# Run the demo vehicle on a virtual bus (vcan* or in-process; a real bus is refused)
+sim *ARGS="--interface socketcan --channel vcan0":
+    uv run python main.py demo-ecu {{ARGS}}
+
+# Run the DoIP entity simulator (the demo vehicle over DoIP) on loopback
+sim-doip *ARGS="--host 127.0.0.1":
+    uv run python tests/doip_entity.py {{ARGS}}
+
 # Package for Zelos marketplace
 package:
     zelos extensions package .
@@ -82,5 +90,5 @@ delete-release VERSION:
 
 # Clean build artifacts
 clean:
-    rm -rf dist build .pytest_cache .ruff_cache *.tar.gz .artifacts
+    rm -rf dist build .pytest_cache .ruff_cache *.tar.gz .artifacts actions.json
     find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true

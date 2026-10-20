@@ -27,6 +27,10 @@ jobs:
 
       - uses: extractions/setup-just@v4
 
+      - name: Verify uv.lock is in sync with pyproject.toml
+        # A stale lock otherwise ships in the marketplace package and fails at install.
+        run: uv lock --locked
+
       - name: Install dependencies
         run: just ci-install
 

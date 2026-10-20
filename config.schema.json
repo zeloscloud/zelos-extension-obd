@@ -1,31 +1,511 @@
 {
-  "$comment": "This schema defines the configuration UI in Zelos App. See https://docs.zeloscloud.io/sdk/how-to/develop-extensions/#configuration for full widget reference.",
+  "$comment": "OBD-II extension configuration schema. See https://docs.zeloscloud.io/sdk/how-to/develop-extensions/#configuration",
   "type": "object",
-  "title": "zelos-extension-obd Configuration",
-  "description": "OBD-II scan tool extension for Zelos",
-  "properties": {
-    "sensor_name": {
-      "type": "string",
-      "title": "Sensor Name",
-      "description": "Unique identifier for this sensor",
-      "default": "sensor-01",
-      "minLength": 3,
-      "maxLength": 50,
-      "ui:placeholder": "Enter sensor name..."
-    },
-    "interval": {
-      "type": "number",
-      "title": "Sample Interval (seconds)",
-      "description": "Data collection interval from 1kHz to 1Hz",
-      "minimum": 0.001,
-      "maximum": 1.0,
-      "multipleOf": 0.001,
-      "default": 0.1,
-      "ui:widget": "range",
-      "ui:help": "Lower values = higher frequency (1ms increments)"
-    }
+  "title": "OBD-II Configuration",
+  "description": "Scan one or more vehicles with OBD-II (SAE J1979, J1979-2 OBDonUDS) on CAN (ISO 15765-4) or DoIP. Every action transmits on the vehicle's bus.",
+  "ui:options": {
+    "autoconfig": "OBD/auto_config"
   },
-  "required": [
-    "sensor_name"
-  ]
+  "properties": {
+    "vehicles": {
+      "type": "array",
+      "title": "Vehicles",
+      "description": "One entry per vehicle (one CAN bus or DoIP entity), or use Auto-configure for a demo vehicle.",
+      "items": {
+        "title": "Vehicle",
+        "type": "object",
+        "properties": {
+          "interface": {
+            "type": "string",
+            "title": "Interface",
+            "description": "How the extension reaches the vehicle: SocketCAN (Linux), SocketCAN over SSH (a remote Linux device's SocketCAN, from any OS), PCAN, Kvaser, Vector, slcan, or Other (any python-can interface, e.g. gs_usb). Demo: a built-in simulated vehicle with three ECUs. DoIP: OBD-II over TCP/IP (ISO 13400) to the vehicle's DoIP entity. The bus opens when the extension starts.",
+            "enum": [
+              "SocketCAN",
+              "SocketCAN over SSH",
+              "PCAN",
+              "Kvaser",
+              "Vector",
+              "slcan (serial)",
+              "Other (python-can)",
+              "Demo",
+              "DoIP"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Name the actions take as `vehicle` and the trace shows. Letters, digits, space, '_' and '-' only. Defaults to the CAN channel, sanitized, 'demo' or 'doip'.",
+            "pattern": "^[A-Za-z0-9 _-]*$",
+            "ui:placeholder": "car"
+          },
+          "addressing": {
+            "type": "string",
+            "title": "Addressing",
+            "enum": [
+              "11-bit",
+              "29-bit"
+            ],
+            "default": "11-bit",
+            "description": "ISO 15765-4 identifiers: 11-bit (0x7DF, answers on 0x7E8-0x7EF) or 29-bit (0x18DB33F1, answers on 0x18DAF1xx). Detect finds it. Not used over DoIP."
+          },
+          "protocol": {
+            "type": "string",
+            "title": "Protocol",
+            "enum": [
+              "auto",
+              "legacy",
+              "uds"
+            ],
+            "default": "auto",
+            "description": "auto: ask 22 F810 (J1979-2), then 01 00. legacy: SAE J1979 services 01-0A. uds: SAE J1979-2 (OBDonUDS, MY2027+ US light duty)."
+          },
+          "polling": {
+            "type": "object",
+            "title": "Polling",
+            "description": "PIDs read from the start at a fixed period, into the trace. Transmits for as long as the extension runs.",
+            "properties": {
+              "pids": {
+                "type": "array",
+                "title": "PIDs",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Catalogue names (EngineRPM) or hex (0C)."
+              },
+              "period_s": {
+                "type": "number",
+                "title": "Period (s)",
+                "default": 1.0,
+                "minimum": 0.05,
+                "maximum": 3600
+              }
+            },
+            "ui:options": {
+              "collapsed": true
+            }
+          }
+        },
+        "required": [
+          "interface"
+        ],
+        "dependencies": {
+          "interface": {
+            "oneOf": [
+              {
+                "properties": {
+                  "interface": {
+                    "enum": [
+                      "SocketCAN"
+                    ]
+                  },
+                  "channel": {
+                    "type": "string",
+                    "title": "Channel",
+                    "description": "SocketCAN interface name (can0, vcan0, slcan0, ...). Choose from the interfaces on the machine running the agent, or type a name.",
+                    "default": "can0",
+                    "ui:widget": "action-choices",
+                    "ui:options": {
+                      "action": "OBD/list_interfaces"
+                    }
+                  },
+                  "config_json": {
+                    "type": "string",
+                    "title": "Advanced Configuration (JSON)",
+                    "description": "Additional python-can Bus() kwargs as JSON object"
+                  }
+                },
+                "required": [
+                  "channel"
+                ]
+              },
+              {
+                "properties": {
+                  "interface": {
+                    "enum": [
+                      "SocketCAN over SSH"
+                    ]
+                  },
+                  "remote_host": {
+                    "type": "string",
+                    "title": "Remote Host",
+                    "description": "Hostname or IP of the edge device running SocketCAN, reached over SSH (may be a ~/.ssh/config alias)"
+                  },
+                  "remote_channel": {
+                    "type": "string",
+                    "title": "Remote CAN Channel",
+                    "description": "SocketCAN interface name on the remote edge device (e.g. can0, vcan0)",
+                    "default": "can0"
+                  },
+                  "ssh_user": {
+                    "type": "string",
+                    "title": "SSH User",
+                    "description": "Username for the SSH connection (optional; falls back to your ssh config / current user)"
+                  },
+                  "ssh_port": {
+                    "type": "integer",
+                    "title": "SSH Port",
+                    "description": "TCP port for the SSH connection",
+                    "default": 22
+                  },
+                  "ssh_key_path": {
+                    "type": "string",
+                    "title": "SSH Key File",
+                    "description": "Path to a private key file for SSH authentication (optional)",
+                    "ui:widget": "file-picker"
+                  },
+                  "ssh_host_key_policy": {
+                    "type": "string",
+                    "title": "SSH Host Key Policy",
+                    "description": "How to treat the edge's SSH host key. 'auto' trusts whatever key the device presents and records nothing, so a reimaged device (which comes back with a new key) reconnects with no manual step. 'strict' uses your own ~/.ssh/known_hosts: an unknown or changed key is reported and the bus stops, rather than retrying.",
+                    "enum": [
+                      "auto",
+                      "strict"
+                    ],
+                    "default": "auto"
+                  },
+                  "ssh_extra_opts": {
+                    "type": "string",
+                    "title": "SSH Extra Options",
+                    "description": "Additional ssh command-line options, space-separated (e.g. -J bastion). Placed before the options above; ssh honours the first -o it sees, so these win over the settings above."
+                  },
+                  "ssh_hw_timestamps": {
+                    "type": "boolean",
+                    "title": "Hardware timestamps",
+                    "description": "Uses the adapter's hardware clock when the edge's candump supports -H; interfaces without one (vcan, some slcan) fall back to the extension's wall clock. Turn off to use the edge kernel's receive time.",
+                    "default": true,
+                    "ui:widget": "toggle"
+                  }
+                },
+                "required": [
+                  "interface",
+                  "remote_host"
+                ]
+              },
+              {
+                "properties": {
+                  "interface": {
+                    "enum": [
+                      "PCAN"
+                    ]
+                  },
+                  "channel": {
+                    "type": "string",
+                    "title": "Channel",
+                    "description": "CAN channel identifier",
+                    "default": "PCAN_USBBUS1"
+                  },
+                  "bitrate": {
+                    "type": "integer",
+                    "title": "Bitrate (bps)",
+                    "description": "ISO 15765-4 bitrates: 500 kbit/s (legislated) or 250 kbit/s. Detect tries this one, the other only after bus errors.",
+                    "enum": [
+                      500000,
+                      250000
+                    ],
+                    "default": 500000
+                  },
+                  "config_json": {
+                    "type": "string",
+                    "title": "Advanced Configuration (JSON)",
+                    "description": "Additional python-can Bus() kwargs as JSON object"
+                  }
+                },
+                "required": [
+                  "channel",
+                  "bitrate"
+                ]
+              },
+              {
+                "properties": {
+                  "interface": {
+                    "enum": [
+                      "Kvaser"
+                    ]
+                  },
+                  "channel": {
+                    "type": "string",
+                    "title": "Channel",
+                    "description": "CAN channel identifier",
+                    "default": "0"
+                  },
+                  "bitrate": {
+                    "type": "integer",
+                    "title": "Bitrate (bps)",
+                    "description": "ISO 15765-4 bitrates: 500 kbit/s (legislated) or 250 kbit/s. Detect tries this one, the other only after bus errors.",
+                    "enum": [
+                      500000,
+                      250000
+                    ],
+                    "default": 500000
+                  },
+                  "config_json": {
+                    "type": "string",
+                    "title": "Advanced Configuration (JSON)",
+                    "description": "Additional python-can Bus() kwargs as JSON object"
+                  }
+                },
+                "required": [
+                  "channel",
+                  "bitrate"
+                ]
+              },
+              {
+                "properties": {
+                  "interface": {
+                    "enum": [
+                      "Vector"
+                    ]
+                  },
+                  "channel": {
+                    "type": "string",
+                    "title": "Channel",
+                    "description": "CAN channel identifier",
+                    "default": "0"
+                  },
+                  "bitrate": {
+                    "type": "integer",
+                    "title": "Bitrate (bps)",
+                    "description": "ISO 15765-4 bitrates: 500 kbit/s (legislated) or 250 kbit/s. Detect tries this one, the other only after bus errors.",
+                    "enum": [
+                      500000,
+                      250000
+                    ],
+                    "default": 500000
+                  },
+                  "config_json": {
+                    "type": "string",
+                    "title": "Advanced Configuration (JSON)",
+                    "description": "Additional python-can Bus() kwargs as JSON object"
+                  }
+                },
+                "required": [
+                  "channel",
+                  "bitrate"
+                ]
+              },
+              {
+                "properties": {
+                  "interface": {
+                    "enum": [
+                      "slcan (serial)"
+                    ]
+                  },
+                  "channel": {
+                    "type": "string",
+                    "title": "Serial Port",
+                    "description": "Serial device of the slcan adapter: /dev/ttyACM0 (Linux), /dev/tty.usbmodem... (macOS), COM3 (Windows).",
+                    "ui:placeholder": "/dev/ttyACM0"
+                  },
+                  "bitrate": {
+                    "type": "integer",
+                    "title": "Bitrate (bps)",
+                    "description": "ISO 15765-4 bitrates: 500 kbit/s (legislated) or 250 kbit/s. Detect tries this one, the other only after bus errors.",
+                    "enum": [
+                      500000,
+                      250000
+                    ],
+                    "default": 500000
+                  },
+                  "config_json": {
+                    "type": "string",
+                    "title": "Advanced Configuration (JSON)",
+                    "description": "Additional python-can slcan Bus() kwargs as JSON object, e.g. {\"tty_baudrate\": 115200} for a UART adapter"
+                  }
+                },
+                "required": [
+                  "channel",
+                  "bitrate"
+                ]
+              },
+              {
+                "properties": {
+                  "interface": {
+                    "enum": [
+                      "Other (python-can)"
+                    ]
+                  },
+                  "config_json": {
+                    "type": "string",
+                    "title": "Advanced Configuration (JSON)",
+                    "description": "Provide complete python-can Bus() kwargs as JSON. Must include 'interface' and 'channel' keys. Example: {\"interface\": \"ixxat\", \"channel\": 0, \"bitrate\": 500000}"
+                  }
+                },
+                "required": [
+                  "config_json"
+                ]
+              },
+              {
+                "properties": {
+                  "interface": {
+                    "enum": [
+                      "Demo"
+                    ]
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "interface": {
+                    "enum": [
+                      "DoIP"
+                    ]
+                  },
+                  "doip": {
+                    "type": "object",
+                    "title": "DoIP",
+                    "properties": {
+                      "host": {
+                        "type": "string",
+                        "title": "Host",
+                        "description": "IP address or hostname of the DoIP entity (the vehicle's gateway). Empty with Discover: found by a broadcast vehicle identification request, which exactly one entity must answer.",
+                        "ui:placeholder": "192.168.77.2"
+                      },
+                      "port": {
+                        "type": "integer",
+                        "title": "TCP Port",
+                        "description": "The entity's diagnostic TCP port.",
+                        "default": 13400,
+                        "minimum": 1,
+                        "maximum": 65535
+                      },
+                      "tester_address": {
+                        "type": "string",
+                        "title": "Tester Logical Address",
+                        "description": "The extension's own logical address (source address), hex. The entity must accept it in routing activation.",
+                        "pattern": "^(0[xX])?[0-9A-Fa-f]{1,4}$",
+                        "default": "0x0E80"
+                      },
+                      "ecu_address": {
+                        "type": "string",
+                        "title": "Target Address",
+                        "description": "Logical address requests go to, hex: 0xE400 the functional group (every ECU), or one ECU's address.",
+                        "pattern": "^((0[xX])?[0-9A-Fa-f]{1,4})?$",
+                        "ui:placeholder": "0xE400",
+                        "default": "0xE400"
+                      },
+                      "activation_type": {
+                        "type": "string",
+                        "title": "Routing Activation Type",
+                        "description": "Hex: 0x00 default, 0x01 WWH-OBD, 0xE0 central security, 0xE1 to 0xFF OEM-specific.",
+                        "pattern": "^(0[xX])?[0-9A-Fa-f]{1,2}$",
+                        "default": "0x00"
+                      },
+                      "tcp_timeout": {
+                        "type": "number",
+                        "title": "TCP Timeout (s)",
+                        "description": "Bounds the TCP connect and the entity's acknowledgement of each request.",
+                        "default": 2.0,
+                        "exclusiveMinimum": 0
+                      },
+                      "discover": {
+                        "type": "boolean",
+                        "title": "Discover",
+                        "description": "Before connecting, send a vehicle identification request (UDP 13400) to Host, or broadcast without one. The answer (IP, logical address, VIN, EID) shows in Get Status.",
+                        "default": false,
+                        "ui:widget": "toggle"
+                      }
+                    },
+                    "dependencies": {
+                      "discover": {
+                        "oneOf": [
+                          {
+                            "properties": {
+                              "discover": {
+                                "enum": [
+                                  false
+                                ]
+                              }
+                            },
+                            "required": [
+                              "host"
+                            ]
+                          },
+                          {
+                            "properties": {
+                              "discover": {
+                                "enum": [
+                                  true
+                                ]
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "description": "OBD-II over DoIP: requests go to the functional address and every ECU behind the entity answers from its logical address."
+                  }
+                },
+                "required": [
+                  "doip"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    "advanced": {
+      "type": "object",
+      "title": "Advanced",
+      "description": "Settings that apply to every vehicle.",
+      "properties": {
+        "prefix": {
+          "type": "string",
+          "title": "Prefix",
+          "default": "OBD",
+          "ui:placeholder": "OBD",
+          "ui:emptyValue": "",
+          "description": "Leading trace source every vehicle publishes under, so events read '<prefix>/<vehicle>/tx'. Clear it to give each vehicle its own trace source."
+        },
+        "log_level": {
+          "type": "string",
+          "title": "Log Level",
+          "description": "Extension logging verbosity",
+          "enum": [
+            "DEBUG",
+            "INFO",
+            "WARNING",
+            "ERROR"
+          ],
+          "default": "INFO"
+        },
+        "p2_timeout": {
+          "type": "number",
+          "title": "Response Window (seconds)",
+          "default": 0.1,
+          "minimum": 0.02,
+          "maximum": 10.0,
+          "description": "How long to wait for the first, and each further, ECU's answer to a request (ISO 15765-4 P2CAN is 0.05 s). Raise it over SSH or a slow DoIP gateway."
+        },
+        "p2_star_timeout": {
+          "type": "number",
+          "title": "P2* Timeout (seconds)",
+          "default": 5.0,
+          "minimum": 0.1,
+          "maximum": 60.0,
+          "description": "How long to wait after each response-pending (NRC 0x78) answer."
+        },
+        "isotp_padding": {
+          "type": "integer",
+          "title": "Padding Byte",
+          "default": 204,
+          "minimum": 0,
+          "maximum": 255,
+          "description": "Byte every sent frame is padded to 8 bytes with (ISO 15765-4: DLC is always 8); 204 = 0xCC."
+        },
+        "debug_frames": {
+          "type": "boolean",
+          "title": "Debug Frames",
+          "default": false,
+          "ui:widget": "toggle",
+          "description": "Log every ISO-TP frame and DoIP message at DEBUG level."
+        }
+      },
+      "additionalProperties": false,
+      "default": {},
+      "ui:options": {
+        "collapsed": true
+      }
+    }
+  }
 }
