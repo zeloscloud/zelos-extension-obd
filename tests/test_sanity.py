@@ -6,6 +6,7 @@ import itertools
 import json
 import subprocess
 import sys
+import threading
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -213,3 +214,72 @@ def test_demo_refuses_a_real_bus():
     for interface, channel in (("socketcan", "can0"), ("pcan", "PCAN_USBBUS1")):
         with pytest.raises(ValueError, match="virtual bus only"):
             DemoVehicle(channel, interface=interface)
+
+
+class PendingForever(can.Listener):
+    """A legacy ECU on 0x7E8: 01 00 lists PID 0C; 01 0C gets 0x78 every 0.5 s, 20 times."""
+
+    def __init__(self, channel: str) -> None:
+        self.bus = can.Bus(interface="virtual", channel=channel, receive_own_messages=False)
+        self.notifier, self.done = can.Notifier(self.bus, [self]), threading.Event()
+
+    def _send(self, data: bytes) -> None:
+        self.bus.send(can.Message(arbitration_id=0x7E8, is_extended_id=False,
+                                  data=data.ljust(8, b"\xaa")))  # fmt: skip
+
+    def on_message_received(self, msg: can.Message) -> None:
+        if bytes(msg.data[:3]) == b"\x02\x01\x00":
+            self._send(b"\x06\x41\x00\x00\x10\x00\x00")
+        elif bytes(msg.data[:3]) == b"\x02\x01\x0c":
+            self._send(b"\x03\x7f\x01\x78")
+            threading.Thread(target=self._pending, daemon=True).start()
+
+    def _pending(self) -> None:
+        for _ in range(20):
+            if self.done.wait(0.5):
+                return
+            self._send(b"\x03\x7f\x01\x78")
+
+    def close(self) -> None:
+        self.done.set()
+        self.notifier.stop()
+        self.bus.shutdown()
+
+
+@pytest.mark.parametrize("case", ["split", "physical-11", "physical-29", "detect-29", "pending"])
+def test_wire_behaviour(case):
+    """What only the extension decides on the wire, against the demo."""
+    channel = f"obd-sanity-{next(_channels)}"
+    extended = case.endswith("29")
+    sniffer = Sniffer(channel)
+    ecu = PendingForever(channel) if case == "pending" else DemoVehicle(
+        channel, interface="virtual", extended=extended).start()  # fmt: skip
+    settings = {"split": {}, "physical-11": {}, "physical-29": {"addressing": "29-bit"},
+                "detect-29": {}, "pending": {"protocol": "legacy"}}[case]  # fmt: skip
+    vehicle = _can_vehicle(channel, **settings)
+    try:
+        if case == "split":  # a functional $22 on CAN is one single frame: 3 DIDs at most
+            scan.read_pids(vehicle, scan.parse_pids("0C, 0D, 05, 42"))
+            reads = [p for p in sniffer.sent() if p[:1] == b"\x22" and p[1:3] != b"\xf8\x10"]
+            assert [len(p) for p in reads] == [7, 3]
+        elif case.startswith("physical"):
+            target = 0x18DAF111 if extended else 0x7E9
+            result = scan.read_pids(vehicle, [0x42], ecu=target)
+            assert set(result["responders"]) == {f"{target:04x}"}
+            ours = {m.arbitration_id for m in sniffer.frames if m.arbitration_id not in
+                    {0x7E8, 0x7E9, 0x7EA} and m.arbitration_id >> 8 != 0x18DAF1}  # fmt: skip
+            assert ours == ({0x18DA11F1} if extended else {0x7E1})
+        elif case == "detect-29":
+            found = scan.detect(vehicle)
+            assert (found["addressing"], found["protocol"]) == ("29-bit", "uds")
+            assert vehicle.status()["functional_id"] == "0x18DB33F1"
+        else:  # one 0x78 waited through (P2*), a second ends the wait and frees the vehicle
+            start = time.monotonic()
+            got = scan.read_pids(vehicle, [0x0C])
+            assert time.monotonic() - start < ADVANCED_DEFAULTS["p2_star_timeout"] + 1
+            assert got["responders"]["07e8"]["nrc"] == 0x78
+            assert scan.supported_pids(vehicle)["status"] == "success"
+    finally:
+        stop_all([vehicle])
+        sniffer.close()
+        ecu.close() if case == "pending" else ecu.stop()
