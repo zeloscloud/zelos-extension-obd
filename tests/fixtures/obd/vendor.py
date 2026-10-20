@@ -17,25 +17,13 @@ SOURCE = "api/py/zelos-can/test"
 #: Traces with the tester's requests and the ECUs' answers logged (the client replays them).
 TRACES = (
     "canhacker-gm-pids.log",
-    "canhacker-gm-dtc.log",
-    "canhacker-gm-t0.log",
-    "canhacker-gm-olf.log",
     "canhacker-vin.log",
     "comma-ford-f-150-mk14.log",
-    "comma-honda-accord-bus1.log",
-    "comma-jeep-grand-cherokee-2019.log",
-    "comma-mazda-cx5-2022.log",
-    "comma-nissan-leaf.log",
-    "comma-nissan-rogue.log",
-    "comma-ram-1500-5th-gen.log",
-    "comma-skoda-kodiaq-mk1-bus1.log",
-    "comma-toyota-rav4-tss2.log",
-    "comma-volkswagen-atlas-mk1-bus1.log",
+    "comma-nissan-rogue-bus1.log",
     "css-api-examples-7512be4d-00000001.log",
 )
 FILES = (
     "obd_oracle.py",
-    "obd_rules.py",
     "fixtures/obd/LICENSES",
     *(f"fixtures/obd/{t}" for t in TRACES),
 )

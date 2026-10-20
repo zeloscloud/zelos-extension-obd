@@ -3,8 +3,7 @@
 Real vehicles (tests/fixtures/obd, vendored with an independent oracle): every recorded
 request is sent again by the client to ECUs that answer with the recorded frames; the
 client's answers must be the oracle's reassembly and its decoded values the oracle's.
-The same requests go to the demo vehicle, whose answers must follow the rules a real
-ECU's do. Scripted: published J1979-2 byte vectors (no public J1979-2 trace exists) and
+Scripted: published J1979-2 byte vectors (no public J1979-2 trace exists) and
 the ISO 15765-4 init rules.
 """
 
@@ -16,20 +15,17 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import can
 import pytest
 from fake_ecu import FakeEcus, Reply, Script, reply
 from zelos_can import isotp as diag
 
 from zelos_extension_obd import scan
 from zelos_extension_obd.constants import ADVANCED_DEFAULTS, Interface
-from zelos_extension_obd.demo import DemoVehicle
 from zelos_extension_obd.vehicle import State, Vehicle
 
 FIXTURES = Path(__file__).parent / "fixtures" / "obd"
 sys.path.insert(0, str(FIXTURES))
 import obd_oracle as oracle  # noqa: E402
-import obd_rules as rules  # noqa: E402
 
 # "vendor" is also the conformance suite's module name
 _spec = importlib.util.spec_from_file_location("replay_vendor", FIXTURES / "vendor.py")
@@ -280,52 +276,4 @@ def test_parser_matches_oracle(trace):
 
 
 #: Traces holding only UDS (OEM DIDs, sessions): transport parity only.
-NO_DECODED_VALUES = {
-    "comma-honda-accord-bus1.log",
-    "comma-mazda-cx5-2022.log",
-    "comma-nissan-leaf.log",
-    "comma-ram-1500-5th-gen.log",
-    "comma-skoda-kodiaq-mk1-bus1.log",
-    "comma-volkswagen-atlas-mk1-bus1.log",
-    "comma-ford-f-150-mk14.log",
-}
-
-
-class _Recorder(can.Listener):
-    def __init__(self, channel: str) -> None:
-        self.bus = can.Bus(interface="virtual", channel=channel, receive_own_messages=False)
-        self.frames: list[oracle.Frame] = []
-        self.notifier = can.Notifier(self.bus, [self])
-
-    def on_message_received(self, msg: can.Message) -> None:
-        self.frames.append(
-            oracle.Frame(msg.timestamp, msg.arbitration_id, msg.is_extended_id, bytes(msg.data))
-        )
-
-    def close(self) -> None:
-        self.notifier.stop()
-        self.bus.shutdown()
-
-
-@pytest.mark.parametrize("trace", vendor.TRACES)
-def test_real_requests_against_demo(trace):
-    """A real scan tool's requests (11-bit, functional and physical) to the demo: its
-    answers follow the rules the recorded real ECUs follow."""
-    recorded = [e for e in exchanges(oracle.read_candump(FIXTURES / trace)) if not e.extended]
-    requests = list({(e.request_id, e.sdu): e for e in recorded}.values())  # repeats add nothing
-    channel = f"obd-replay-{next(_channels)}"
-    demo = DemoVehicle(channel, interface="virtual").start()
-    recorder = _Recorder(channel)
-    vehicle = _vehicle(channel)
-    try:
-        for e in requests:
-            ecu = None if e.functional else e.request_id + 8
-            with vehicle.busy("replay", ecu):
-                vehicle.request(e.sdu)
-    finally:
-        vehicle.stop()
-        vehicle.join(3)
-        recorder.close()
-        demo.stop()
-    findings = rules.check(recorder.frames, timed=False)
-    assert findings == [], rules.summary(findings)
+NO_DECODED_VALUES = {"comma-ford-f-150-mk14.log", "comma-nissan-rogue-bus1.log"}

@@ -2,42 +2,14 @@ Real-vehicle OBD-II CAN traces, MIT licensed. Every file is modified from its
 source: trimmed to the ISO 15765-4 OBD ids (7DF, 7E0-7EF, 18DB33F1, 18DAxxxx),
 one bus per file, and VIN serial digits 12-17 replaced by '0' (in VIN responses
 and in padding bytes copied from them). Everything else is byte-exact.
-Unlicensed traces are fetched at test time only: REMOTE.toml.
 
 | file | source | license (SPDX) | copyright |
 |---|---|---|---|
 | canhacker-gm-pids.log | https://github.com/vinthewrench/canhacker/blob/HEAD/CANFiles/pids.log | MIT | Copyright (c) 2022 Vinnie Moscaritolo |
-| canhacker-gm-pids2.log | https://github.com/vinthewrench/canhacker/blob/HEAD/CANFiles/pids2.log | MIT | Copyright (c) 2022 Vinnie Moscaritolo |
 | canhacker-vin.log | https://github.com/vinthewrench/canhacker/blob/HEAD/CANFiles/vin.log | MIT | Copyright (c) 2022 Vinnie Moscaritolo |
-| canhacker-gm-dtc.log | https://github.com/vinthewrench/canhacker/blob/HEAD/CANFiles/dtc.log | MIT | Copyright (c) 2022 Vinnie Moscaritolo |
-| canhacker-gm-olf.log | https://github.com/vinthewrench/canhacker/blob/HEAD/CANFiles/OLF.log | MIT | Copyright (c) 2022 Vinnie Moscaritolo |
-| canhacker-gm-t0.log | https://github.com/vinthewrench/canhacker/blob/HEAD/CANFiles/t0.log (first 600 OBD frames) | MIT | Copyright (c) 2022 Vinnie Moscaritolo |
-| comma-ford-explorer-mk6-bus1.log | https://huggingface.co/datasets/commaai/commaCarSegments (rlog.zst, one segment of the platform, converted to candump; `-bus1` = panda bus 1, else bus 0) | MIT | comma.ai (dataset card `license: mit`, no copyright line) |
-| comma-ford-explorer-mk6.log | https://huggingface.co/datasets/commaai/commaCarSegments (rlog.zst, one segment of the platform, converted to candump; `-bus1` = panda bus 1, else bus 0) | MIT | comma.ai (dataset card `license: mit`, no copyright line) |
-| comma-ford-f-150-mk14-bus1.log | https://huggingface.co/datasets/commaai/commaCarSegments (rlog.zst, one segment of the platform, converted to candump; `-bus1` = panda bus 1, else bus 0) | MIT | comma.ai (dataset card `license: mit`, no copyright line) |
 | comma-ford-f-150-mk14.log | https://huggingface.co/datasets/commaai/commaCarSegments (rlog.zst, one segment of the platform, converted to candump; `-bus1` = panda bus 1, else bus 0) | MIT | comma.ai (dataset card `license: mit`, no copyright line) |
-| comma-honda-accord-bus1.log | https://huggingface.co/datasets/commaai/commaCarSegments (rlog.zst, one segment of the platform, converted to candump; `-bus1` = panda bus 1, else bus 0) | MIT | comma.ai (dataset card `license: mit`, no copyright line) |
-| comma-honda-accord.log | https://huggingface.co/datasets/commaai/commaCarSegments (rlog.zst, one segment of the platform, converted to candump; `-bus1` = panda bus 1, else bus 0) | MIT | comma.ai (dataset card `license: mit`, no copyright line) |
-| comma-hyundai-ioniq-5.log | https://huggingface.co/datasets/commaai/commaCarSegments (rlog.zst, one segment of the platform, converted to candump; `-bus1` = panda bus 1, else bus 0) | MIT | comma.ai (dataset card `license: mit`, no copyright line) |
-| comma-jeep-grand-cherokee-2019-bus1.log | https://huggingface.co/datasets/commaai/commaCarSegments (rlog.zst, one segment of the platform, converted to candump; `-bus1` = panda bus 1, else bus 0) | MIT | comma.ai (dataset card `license: mit`, no copyright line) |
-| comma-jeep-grand-cherokee-2019.log | https://huggingface.co/datasets/commaai/commaCarSegments (rlog.zst, one segment of the platform, converted to candump; `-bus1` = panda bus 1, else bus 0) | MIT | comma.ai (dataset card `license: mit`, no copyright line) |
-| comma-mazda-cx5-2022-bus1.log | https://huggingface.co/datasets/commaai/commaCarSegments (rlog.zst, one segment of the platform, converted to candump; `-bus1` = panda bus 1, else bus 0) | MIT | comma.ai (dataset card `license: mit`, no copyright line) |
-| comma-mazda-cx5-2022.log | https://huggingface.co/datasets/commaai/commaCarSegments (rlog.zst, one segment of the platform, converted to candump; `-bus1` = panda bus 1, else bus 0) | MIT | comma.ai (dataset card `license: mit`, no copyright line) |
-| comma-nissan-leaf-bus1.log | https://huggingface.co/datasets/commaai/commaCarSegments (rlog.zst, one segment of the platform, converted to candump; `-bus1` = panda bus 1, else bus 0) | MIT | comma.ai (dataset card `license: mit`, no copyright line) |
-| comma-nissan-leaf.log | https://huggingface.co/datasets/commaai/commaCarSegments (rlog.zst, one segment of the platform, converted to candump; `-bus1` = panda bus 1, else bus 0) | MIT | comma.ai (dataset card `license: mit`, no copyright line) |
 | comma-nissan-rogue-bus1.log | https://huggingface.co/datasets/commaai/commaCarSegments (rlog.zst, one segment of the platform, converted to candump; `-bus1` = panda bus 1, else bus 0) | MIT | comma.ai (dataset card `license: mit`, no copyright line) |
-| comma-nissan-rogue.log | https://huggingface.co/datasets/commaai/commaCarSegments (rlog.zst, one segment of the platform, converted to candump; `-bus1` = panda bus 1, else bus 0) | MIT | comma.ai (dataset card `license: mit`, no copyright line) |
-| comma-ram-1500-5th-gen.log | https://huggingface.co/datasets/commaai/commaCarSegments (rlog.zst, one segment of the platform, converted to candump; `-bus1` = panda bus 1, else bus 0) | MIT | comma.ai (dataset card `license: mit`, no copyright line) |
-| comma-rivian-r1-gen1.log | https://huggingface.co/datasets/commaai/commaCarSegments (rlog.zst, one segment of the platform, converted to candump; `-bus1` = panda bus 1, else bus 0) | MIT | comma.ai (dataset card `license: mit`, no copyright line) |
-| comma-skoda-kodiaq-mk1-bus1.log | https://huggingface.co/datasets/commaai/commaCarSegments (rlog.zst, one segment of the platform, converted to candump; `-bus1` = panda bus 1, else bus 0) | MIT | comma.ai (dataset card `license: mit`, no copyright line) |
-| comma-skoda-kodiaq-mk1.log | https://huggingface.co/datasets/commaai/commaCarSegments (rlog.zst, one segment of the platform, converted to candump; `-bus1` = panda bus 1, else bus 0) | MIT | comma.ai (dataset card `license: mit`, no copyright line) |
-| comma-toyota-rav4-tss2-bus1.log | https://huggingface.co/datasets/commaai/commaCarSegments (rlog.zst, one segment of the platform, converted to candump; `-bus1` = panda bus 1, else bus 0) | MIT | comma.ai (dataset card `license: mit`, no copyright line) |
-| comma-toyota-rav4-tss2.log | https://huggingface.co/datasets/commaai/commaCarSegments (rlog.zst, one segment of the platform, converted to candump; `-bus1` = panda bus 1, else bus 0) | MIT | comma.ai (dataset card `license: mit`, no copyright line) |
-| comma-volkswagen-atlas-mk1-bus1.log | https://huggingface.co/datasets/commaai/commaCarSegments (rlog.zst, one segment of the platform, converted to candump; `-bus1` = panda bus 1, else bus 0) | MIT | comma.ai (dataset card `license: mit`, no copyright line) |
-| comma-volkswagen-atlas-mk1.log | https://huggingface.co/datasets/commaai/commaCarSegments (rlog.zst, one segment of the platform, converted to candump; `-bus1` = panda bus 1, else bus 0) | MIT | comma.ai (dataset card `license: mit`, no copyright line) |
 | css-api-examples-7512be4d-00000001.log | https://github.com/CSS-Electronics/api-examples/blob/HEAD/examples/other/s3-upload-log-files/LOG/7512BE4D/00000427/00000001.MF4 (MF4 to candump, first 600 OBD frames) | MIT | Copyright (c) 2020 CSS-Electronics |
-| css-api-examples-3ba199e2-60fe3f04.log | https://github.com/CSS-Electronics/api-examples/blob/HEAD/examples/other/matlab-basics/LOG_datastore/3BA199E2/00000164/00000001-60FE3F04.MF4 (MF4 to candump, first 600 OBD frames) | MIT | Copyright (c) 2020 CSS-Electronics |
-| css-api-examples-17bd1db7-00000170.log | https://github.com/CSS-Electronics/api-examples/blob/HEAD/examples/data-processing/LOG/17BD1DB7/00000006/00000170.MF4 (MF4 to candump) | MIT | Copyright (c) 2020 CSS-Electronics |
 
 License text (identical for every holder above; each holder's copyright line is
 in the table):
