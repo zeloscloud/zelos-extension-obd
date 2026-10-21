@@ -2,7 +2,7 @@
 # See https://docs.zeloscloud.io/sdk/how-to/develop-extensions/ for full documentation
 
 name = "OBD"
-version = "0.1.0"
+version = "0.1.1"
 description = "OBD-II scan tool: live PIDs, DTCs, readiness, vehicle info and a gated clear, over CAN or DoIP"
 author = "Zelos"
 repository = "https://github.com/zeloscloud/zelos-extension-obd"
