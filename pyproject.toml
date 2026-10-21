@@ -1,6 +1,6 @@
 [project]
 name = "zelos-extension-obd"
-version = "0.1.0"
+version = "0.1.1"
 description = "OBD-II scan tool extension for Zelos"
 authors = [{ name = "Zelos", email = "info@zeloscloud.io" }]
 readme = "README.md"
