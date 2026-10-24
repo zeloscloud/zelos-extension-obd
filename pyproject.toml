@@ -18,7 +18,7 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
-    "zelos-sdk>=0.0.12",
+    "zelos-sdk>=0.0.13a1",
     "rich-click>=1.8.0",
     # CAN bus runtime (`zelos_can.bus`), the diagnostics transports `zelos_can.isotp` and
     # `zelos_can.doip` (extra `diag`) and the PID catalogue `zelos_can.obd`.
