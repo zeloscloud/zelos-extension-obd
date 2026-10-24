@@ -162,6 +162,35 @@ def test_every_action_once(car):
     assert len(sent()) == count
 
 
+def test_action_flags():
+    """Pins each action's flags, so a new action or a changed flag is a deliberate choice."""
+    registered = actions.register_actions(
+        type("Registry", (), {"register": lambda *a, **k: None})()
+    )
+    flags = {
+        name: (getattr(actions, name)._action.read_only, getattr(actions, name)._action.hidden)
+        for name in registered
+    }
+    assert flags == {
+        "list_vehicles": (True, True),
+        "get_status": (True, True),
+        "detect": (False, True),
+        "supported_pids": (True, True),
+        "read_pids": (True, False),
+        "monitor_status": (True, False),
+        "read_dtcs": (True, False),
+        "freeze_frame": (True, False),
+        "vehicle_info": (True, False),
+        "clear_dtcs": (False, False),
+        "test_results": (True, False),
+        "in_use_ratios": (True, False),
+        "start_polling": (False, False),
+        "stop_polling": (False, False),
+        "auto_config": (True, True),
+        "list_interfaces": (True, True),
+    }
+
+
 def test_clear_needs_a_real_true(car):
     """No clear request (04 / 14) goes out without confirm True, functional or physical."""
     _, _, sent, engine = car
