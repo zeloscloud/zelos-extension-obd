@@ -83,7 +83,10 @@ def guarded(func: Callable[..., dict[str, Any]]) -> Callable[..., dict[str, Any]
 
 
 @action(
-    "List Vehicles", "Every configured vehicle: name, interface, endpoint, state. Sends nothing."
+    "List Vehicles",
+    "Every configured vehicle: name, interface, endpoint, state. Sends nothing.",
+    read_only=True,
+    hidden=True,
 )
 def list_vehicles() -> dict[str, Any]:
     keys = ("name", "interface", "endpoint", "protocol", "state", "responders")
@@ -95,6 +98,8 @@ def list_vehicles() -> dict[str, Any]:
     "Get Status",
     "State, last error, addressing, protocol, responders seen, polling tasks and request "
     "counters of one vehicle. Sends nothing.",
+    read_only=True,
+    hidden=True,
 )
 @_vehicle_field
 @guarded
@@ -111,6 +116,7 @@ def get_status(vehicle: str) -> dict[str, Any]:
     "adapters the extension sets the bitrate of: a wrong bitrate on a running bus causes "
     "error frames.",
     timeout=DETECT_TIMEOUT,
+    hidden=True,
 )
 @_vehicle_field
 @_ecu_field
@@ -123,6 +129,8 @@ def detect(vehicle: str, ecu: str = "") -> dict[str, Any]:
     "Supported PIDs",
     "Transmits. Walks the support bitmaps (00, 20, 40, ...) of every ECU: current data, "
     "freeze frame or vehicle information.",
+    read_only=True,
+    hidden=True,
 )
 @_vehicle_field
 @action.select("service", title="Service", choices=list(SERVICES), default="Current data (01)",
@@ -142,6 +150,7 @@ def supported_pids(
     "Read PIDs",
     "Transmits. Current data (01; J1979-2: 22 F4xx) of every ECU that supports the PIDs, "
     "decoded with units; up to 6 PIDs per request.",
+    read_only=True,
 )
 @_vehicle_field
 @action.text("pids", title="PIDs", description="Catalogue names or hex, comma separated",
@@ -157,6 +166,7 @@ def read_pids(vehicle: str, pids: str, ecu: str = "") -> dict[str, Any]:
     "Monitor Status",
     "Transmits. MIL, confirmed DTC count and readiness monitors (complete / incomplete) "
     "per ECU (01 01; J1979-2: 22 F501, MIL and count).",
+    read_only=True,
 )
 @_vehicle_field
 @_ecu_field
@@ -169,6 +179,7 @@ def monitor_status(vehicle: str, ecu: str = "") -> dict[str, Any]:
     "Read DTCs",
     "Transmits. Stored, pending and permanent DTCs per ECU (03, 07, 0A; J1979-2: 19 42 "
     "with status masks 08 and 04, and 19 55, with each DTC's status).",
+    read_only=True,
 )
 @_vehicle_field
 @_ecu_field
@@ -182,6 +193,7 @@ def read_dtcs(vehicle: str, ecu: str = "") -> dict[str, Any]:
     "Transmits. Freeze frame 0 (02) per ECU: the DTC that stored it and the PIDs it holds. "
     "J1979-2: the first and latest snapshot (19 04 records 00 / F0) of each pending or "
     "confirmed DTC, asked of the ECU that reports it.",
+    read_only=True,
 )
 @_vehicle_field
 @_ecu_field
@@ -194,6 +206,7 @@ def freeze_frame(vehicle: str, ecu: str = "") -> dict[str, Any]:
     "Vehicle Info",
     "Transmits. VIN, calibration ids, calibration verification numbers and ECU names "
     "(09 02/04/06/0A; J1979-2: 22 F802/F804/F806/F80A).",
+    read_only=True,
 )
 @_vehicle_field
 @_ecu_field
@@ -230,6 +243,7 @@ def clear_dtcs(vehicle: str, confirm: bool = False, ecu: str = "") -> dict[str, 
     "Transmits. On-board monitoring test results, decoded (value, limits, unit, pass): "
     "every supported monitor (06; J1979-2: per DTC, 19 1A 92 then 19 06 DTC 92), or one "
     "legacy monitor id (00, 20...: the supported ones).",
+    read_only=True,
 )
 @_vehicle_field
 @action.text("mid", title="Monitor ID (hex)", description="Empty: every supported one",
@@ -254,6 +268,7 @@ def test_results(vehicle: str, mid: str = "", ecu: str = "") -> dict[str, Any]:
     "Transmits. In-use monitor performance: general denominator, ignition cycles and each "
     "monitor's numerator / denominator (09 08 / 0B; J1979-2: 22 F808 / F80B, and per DTC "
     "19 1A 91 then 19 06 DTC 91).",
+    read_only=True,
 )
 @_vehicle_field
 @_ecu_field
@@ -294,6 +309,8 @@ def stop_polling(vehicle: str, task_id: str) -> dict[str, Any]:
     "Auto-configure",
     "One demo vehicle, for the config form's Auto-configure button.",
     standalone=True,
+    read_only=True,
+    hidden=True,
 )
 def auto_config() -> dict[str, Any]:
     return {"status": "success", "config": {"vehicles": [dict(DEMO_VEHICLE)]}}
@@ -304,6 +321,8 @@ def auto_config() -> dict[str, Any]:
     "SocketCAN interfaces on the machine running the agent, for the Channel field. Empty on "
     "macOS and Windows.",
     standalone=True,
+    read_only=True,
+    hidden=True,
 )
 def list_interfaces() -> dict[str, Any]:
     return {"status": "success", "choices": discovery.list_interfaces()}
