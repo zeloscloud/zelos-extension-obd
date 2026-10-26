@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Zelos OBD-II extension: an OBD-II scan tool over CAN (ISO 15765-4) or DoIP."""
 
 import logging
@@ -7,11 +6,7 @@ from pathlib import Path
 
 import rich_click as click
 
-from zelos_extension_obd import ACTION_PREFIX as _ACTION_PREFIX
 from zelos_extension_obd import cli as cli_commands
-
-#: Re-exported for the at-rest inventory dump, which reads this entry module.
-ACTION_PREFIX = _ACTION_PREFIX
 
 click.rich_click.USE_RICH_MARKUP = True
 click.rich_click.USE_MARKDOWN = True
