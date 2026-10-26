@@ -107,6 +107,7 @@ def get_status(vehicle: str) -> dict[str, Any]:
     return _get(vehicle).status()
 
 
+# Not read_only: a retry at the second bitrate causes error frames on a running bus.
 @action(
     "Detect",
     "Transmits. ISO 15765-4 initialization: request 22 F810 (J1979-2), then 01 00, on "
