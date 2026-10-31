@@ -810,7 +810,9 @@ def start_polling(
     if not 0.05 <= period <= 3600:
         raise ValueError("period: 0.05 to 3600 s")
     poll = Poll(vehicle, pids, period, ecu)
-    replaced = stop_polling(vehicle, poll.task_id)["status"] == "success"
+    replaced = poll.task_id in vehicle.polls
+    if replaced:
+        stop_polling(vehicle, poll.task_id)
     vehicle.polls[poll.task_id] = poll.start()
     return {"status": "success", "task_id": poll.task_id, "replaced": replaced}
 
@@ -818,7 +820,7 @@ def start_polling(
 def stop_polling(vehicle: Vehicle, task_id: str) -> dict[str, Any]:
     poll = vehicle.polls.pop(task_id, None)
     if poll is None:
-        return {"status": "error", "error": f"no polling task {task_id!r}"}
+        raise ValueError(f"no polling task {task_id!r}")
     poll.stop()
     poll.join(2.0)
     return {"status": "success", "task_id": task_id, **poll.counts}

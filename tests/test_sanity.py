@@ -14,6 +14,7 @@ from pathlib import Path
 import can
 import pytest
 from doip_entity import DoipEntity
+from zelos_sdk.actions import ActionExecutionError
 
 from zelos_extension_obd import actions, scan
 from zelos_extension_obd.cli.app import create_vehicles, resolve_advanced, start_all, stop_all
@@ -148,8 +149,7 @@ def test_every_action_once(car):
     # detect and clear_dtcs (below), start/stop_polling (with a task id)
     assert registered - set(calls) == {"detect", "clear_dtcs", "start_polling", "stop_polling"}
     for name, kwargs in calls.items():
-        result = getattr(actions, name)(**kwargs)
-        assert result.get("status") != "error", (name, result)
+        assert getattr(actions, name)(**kwargs), name
     if vehicle.interface != Interface.DOIP:  # no CAN addressing to detect over DoIP
         assert actions.detect(vehicle="car")["protocol"] == "uds"
     started = actions.start_polling(vehicle="car", pids="EngineRPM", period_s=0.1)
@@ -214,10 +214,33 @@ def test_the_only_vehicle_is_used_when_the_call_names_none(car, monkeypatch):
     read = actions.read_pids._action.execute(pids="EngineRPM").value
     assert "EngineRPM" in json.dumps(read["responders"][engine])
     monkeypatch.setitem(actions.VEHICLES, "van", vehicle)
-    assert actions.read_dtcs._action.execute().value == {
-        "status": "error",
-        "error": "Several vehicles are configured; set vehicle to one of: car, van",
-    }
+    with pytest.raises(
+        ActionExecutionError,
+        match="^Several vehicles are configured; set vehicle to one of: car, van$",
+    ):
+        actions.read_dtcs._action.execute()
+
+
+def test_a_failed_action_raises_and_a_dry_run_answers(car, monkeypatch, caplog):
+    """Through the SDK, as the agent calls: it shows a failed run only when the action raises."""
+    with pytest.raises(ActionExecutionError, match="^no polling task 'poll:0C'$"):
+        actions.stop_polling._action.execute(vehicle="car", task_id="poll:0C")
+
+    def no_answer(*args):
+        raise scan.NoAnswer("no ECU answered 01 01")
+
+    monkeypatch.setattr(scan, "monitor_status", no_answer)
+    with pytest.raises(ActionExecutionError, match="^no ECU answered 01 01$"):
+        actions.monitor_status._action.execute(vehicle="car")
+
+    def bug(*args):
+        raise KeyError("pid")
+
+    monkeypatch.setattr(scan, "read_dtcs", bug)
+    with pytest.raises(ActionExecutionError, match="^KeyError: 'pid'$"):
+        actions.read_dtcs._action.execute(vehicle="car")
+    assert "read_dtcs failed" in caplog.text
+    assert actions.clear_dtcs._action.execute(vehicle="car").value["status"] == "refused"
 
 
 def test_clear_needs_a_real_true(car):
