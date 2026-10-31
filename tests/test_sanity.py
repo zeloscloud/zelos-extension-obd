@@ -201,6 +201,25 @@ def test_action_flags():
     }
 
 
+def test_the_only_vehicle_is_used_when_the_call_names_none(car, monkeypatch):
+    """Through the SDK, as the agent calls: optional in every schema; with two, the error names
+    them."""
+    vehicle, _, _, engine = car
+    monkeypatch.setattr(actions, "VEHICLES", {"car": vehicle})
+    schemas = [f._action.to_schema() for f in vars(actions).values() if hasattr(f, "_action")]
+    takes_vehicle = [s for s in schemas if "vehicle" in s["properties"]]
+    assert len(takes_vehicle) == 13
+    assert [s["title"] for s in takes_vehicle if "vehicle" in s.get("required", [])] == []
+    assert actions.get_status._action.execute().value["name"] == "car"
+    read = actions.read_pids._action.execute(pids="EngineRPM").value
+    assert "EngineRPM" in json.dumps(read["responders"][engine])
+    monkeypatch.setitem(actions.VEHICLES, "van", vehicle)
+    assert actions.read_dtcs._action.execute().value == {
+        "status": "error",
+        "error": "Several vehicles are configured; set vehicle to one of: car, van",
+    }
+
+
 def test_clear_needs_a_real_true(car):
     """No clear request (04 / 14) goes out without confirm True, functional or physical."""
     _, _, sent, engine = car

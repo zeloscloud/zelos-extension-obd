@@ -1,4 +1,4 @@
-"""`OBD/<name>` actions: one namespace keyed by a `vehicle` parameter.
+"""`OBD/<name>` actions: one namespace keyed by a `vehicle` parameter; unset, the only vehicle.
 
 Every action but `list_vehicles`, `get_status`, `stop_polling` and the config-form
 helpers transmits on the vehicle's bus, functionally (every ECU) or, with `ecu`,
@@ -41,7 +41,13 @@ def _vehicles(*_args: Any) -> list[str]:
     return sorted(VEHICLES)
 
 
-def _get(name: str) -> Vehicle:
+def _get(name: str | None) -> Vehicle:
+    if not name:
+        if len(VEHICLES) == 1:
+            return next(iter(VEHICLES.values()))
+        raise ValueError(
+            f"Several vehicles are configured; set vehicle to one of: {', '.join(_vehicles())}"
+        )
     vehicle = VEHICLES.get(name)
     if vehicle is None:
         raise ValueError(f"Unknown vehicle {name!r}. Available: {_vehicles()}")
@@ -49,7 +55,13 @@ def _get(name: str) -> Vehicle:
 
 
 def _vehicle_field(func: Any) -> Any:
-    return action.select("vehicle", title="Vehicle", choices=_vehicles)(func)
+    return action.select(
+        "vehicle",
+        title="Vehicle",
+        choices=_vehicles,
+        required=False,
+        description="May be omitted when only one is configured",
+    )(func)
 
 
 def _ecu_field(func: Any) -> Any:
@@ -58,7 +70,7 @@ def _ecu_field(func: Any) -> Any:
                        "1001). Empty: every ECU (functional)")(func)  # fmt: skip
 
 
-def _target(vehicle: str, ecu: str) -> tuple[Vehicle, int | None]:
+def _target(vehicle: str | None, ecu: str) -> tuple[Vehicle, int | None]:
     v = _get(vehicle)
     return v, v.parse_ecu(ecu)
 
@@ -103,7 +115,7 @@ def list_vehicles() -> dict[str, Any]:
 )
 @_vehicle_field
 @guarded
-def get_status(vehicle: str) -> dict[str, Any]:
+def get_status(vehicle: str | None = None) -> dict[str, Any]:
     return _get(vehicle).status()
 
 
@@ -122,7 +134,7 @@ def get_status(vehicle: str) -> dict[str, Any]:
 @_vehicle_field
 @_ecu_field
 @guarded
-def detect(vehicle: str, ecu: str = "") -> dict[str, Any]:
+def detect(vehicle: str | None = None, ecu: str = "") -> dict[str, Any]:
     return scan.detect(*_target(vehicle, ecu))
 
 
@@ -139,7 +151,7 @@ def detect(vehicle: str, ecu: str = "") -> dict[str, Any]:
 @_ecu_field
 @guarded
 def supported_pids(
-    vehicle: str, service: str = "Current data (01)", ecu: str = ""
+    vehicle: str | None = None, service: str = "Current data (01)", ecu: str = ""
 ) -> dict[str, Any]:
     if service not in SERVICES:
         raise ValueError(f"service: one of {list(SERVICES)}")
@@ -158,7 +170,7 @@ def supported_pids(
              placeholder="EngineRPM, VehicleSpeed, 05")  # fmt: skip
 @_ecu_field
 @guarded
-def read_pids(vehicle: str, pids: str, ecu: str = "") -> dict[str, Any]:
+def read_pids(vehicle: str | None = None, *, pids: str, ecu: str = "") -> dict[str, Any]:
     v, target = _target(vehicle, ecu)
     return scan.read_pids(v, scan.parse_pids(pids), ecu=target)
 
@@ -172,7 +184,7 @@ def read_pids(vehicle: str, pids: str, ecu: str = "") -> dict[str, Any]:
 @_vehicle_field
 @_ecu_field
 @guarded
-def monitor_status(vehicle: str, ecu: str = "") -> dict[str, Any]:
+def monitor_status(vehicle: str | None = None, ecu: str = "") -> dict[str, Any]:
     return scan.monitor_status(*_target(vehicle, ecu))
 
 
@@ -185,7 +197,7 @@ def monitor_status(vehicle: str, ecu: str = "") -> dict[str, Any]:
 @_vehicle_field
 @_ecu_field
 @guarded
-def read_dtcs(vehicle: str, ecu: str = "") -> dict[str, Any]:
+def read_dtcs(vehicle: str | None = None, ecu: str = "") -> dict[str, Any]:
     return scan.read_dtcs(*_target(vehicle, ecu))
 
 
@@ -199,7 +211,7 @@ def read_dtcs(vehicle: str, ecu: str = "") -> dict[str, Any]:
 @_vehicle_field
 @_ecu_field
 @guarded
-def freeze_frame(vehicle: str, ecu: str = "") -> dict[str, Any]:
+def freeze_frame(vehicle: str | None = None, ecu: str = "") -> dict[str, Any]:
     return scan.freeze_frame(*_target(vehicle, ecu))
 
 
@@ -212,7 +224,7 @@ def freeze_frame(vehicle: str, ecu: str = "") -> dict[str, Any]:
 @_vehicle_field
 @_ecu_field
 @guarded
-def vehicle_info(vehicle: str, ecu: str = "") -> dict[str, Any]:
+def vehicle_info(vehicle: str | None = None, ecu: str = "") -> dict[str, Any]:
     return scan.vehicle_info(*_target(vehicle, ecu))
 
 
@@ -234,7 +246,7 @@ def vehicle_info(vehicle: str, ecu: str = "") -> dict[str, Any]:
 )
 @_ecu_field
 @guarded
-def clear_dtcs(vehicle: str, confirm: bool = False, ecu: str = "") -> dict[str, Any]:
+def clear_dtcs(vehicle: str | None = None, confirm: bool = False, ecu: str = "") -> dict[str, Any]:
     v, target = _target(vehicle, ecu)
     return scan.clear_dtcs(v, confirm is True, target)  # a real True only
 
@@ -251,7 +263,7 @@ def clear_dtcs(vehicle: str, confirm: bool = False, ecu: str = "") -> dict[str, 
              default="", required=False)  # fmt: skip
 @_ecu_field
 @guarded
-def test_results(vehicle: str, mid: str = "", ecu: str = "") -> dict[str, Any]:
+def test_results(vehicle: str | None = None, mid: str = "", ecu: str = "") -> dict[str, Any]:
     number = None
     if str(mid).strip():
         try:
@@ -274,7 +286,7 @@ def test_results(vehicle: str, mid: str = "", ecu: str = "") -> dict[str, Any]:
 @_vehicle_field
 @_ecu_field
 @guarded
-def in_use_ratios(vehicle: str, ecu: str = "") -> dict[str, Any]:
+def in_use_ratios(vehicle: str | None = None, ecu: str = "") -> dict[str, Any]:
     return scan.in_use_ratios(*_target(vehicle, ecu))
 
 
@@ -290,7 +302,9 @@ def in_use_ratios(vehicle: str, ecu: str = "") -> dict[str, Any]:
                required=False)  # fmt: skip
 @_ecu_field
 @guarded
-def start_polling(vehicle: str, pids: str, period_s: float = 1.0, ecu: str = "") -> dict[str, Any]:
+def start_polling(
+    vehicle: str | None = None, *, pids: str, period_s: float = 1.0, ecu: str = ""
+) -> dict[str, Any]:
     v, target = _target(vehicle, ecu)
     return scan.start_polling(v, scan.parse_pids(pids), float(period_s), target)
 
@@ -299,7 +313,7 @@ def start_polling(vehicle: str, pids: str, period_s: float = 1.0, ecu: str = "")
 @_vehicle_field
 @action.text("task_id", title="Task ID", placeholder="poll:0C,0D")
 @guarded
-def stop_polling(vehicle: str, task_id: str) -> dict[str, Any]:
+def stop_polling(vehicle: str | None = None, *, task_id: str) -> dict[str, Any]:
     return scan.stop_polling(_get(vehicle), task_id)
 
 
