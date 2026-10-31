@@ -15,7 +15,7 @@ from typing import Any
 
 import zelos_sdk
 from zelos_can import isotp as diag
-from zelos_sdk.extensions import load_config
+from zelos_sdk.extensions import ConfigValidationError, load_config
 from zelos_sdk.hooks.logging import TraceLoggingHandler
 
 from .. import ACTION_PREFIX, scan
@@ -127,7 +127,10 @@ def set_library_logging(debug_frames: bool) -> None:
 
 def run_app_mode(demo: bool, file: Path | None) -> None:
     """App mode: settings from the Zelos App (plus a demo vehicle with `demo`)."""
-    config = load_config()
+    try:
+        config = load_config()
+    except ConfigValidationError as e:
+        _exit_on("Invalid configuration: " + "; ".join(m.strip(" •") for m in e.errors))
     advanced = resolve_advanced(config)
     prefix = str(advanced.get("prefix") or "").strip()
     _exit_on(name_error(prefix, "Prefix"))
