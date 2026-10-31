@@ -105,11 +105,10 @@ def command(func: Callable[..., dict[str, Any]]) -> Callable[..., None]:
             with cli_vehicle(settings, advanced) as vehicle:
                 kwargs["ecu"] = vehicle.parse_ecu(ecu)
                 result = actions.guarded(func)(vehicle, **kwargs)
-        except (ValueError, ConnectionError) as e:
-            result = {"status": "error", "error": str(e)}
+        except (*actions.FAILURES, RuntimeError) as e:
+            click.echo(json.dumps({"status": "error", "error": str(e)}, indent=2))
+            raise SystemExit(1) from None
         click.echo(json.dumps(result, indent=2))
-        if result.get("status") == "error":
-            raise SystemExit(1)
 
     return _options(run)
 

@@ -81,7 +81,7 @@ The TCP connection opens at start and is held for the session, so one of the ent
 
 ## Actions
 
-Available as `OBD/<action>`. Each takes `vehicle`, which may be left unset when only one vehicle is configured, and those that transmit an optional `ecu` (`7E8`, `18DAF110`, DoIP `1001`): that ECU alone, addressed physically, instead of every ECU (functional). A result is `responders`: one entry per ECU that answered, plus `compliance` when an answer broke a rule a compliant ECU follows (first frame later than P2CAN 50 ms, an NRC where J1979 / J1979-2 allow none, response-pending more than once on J1979-2, a PID its bitmap does not list). No answer at all is `status: error`.
+Available as `OBD/<action>`. Each takes `vehicle`, which may be left unset when only one vehicle is configured, and those that transmit an optional `ecu` (`7E8`, `18DAF110`, DoIP `1001`): that ECU alone, addressed physically, instead of every ECU (functional). A result is `responders`: one entry per ECU that answered, plus `compliance` when an answer broke a rule a compliant ECU follows (first frame later than P2CAN 50 ms, an NRC where J1979 / J1979-2 allow none, response-pending more than once on J1979-2, a PID its bitmap does not list). An action that fails, such as one no ECU answers, raises its reason, so the run shows as failed.
 
 | Action | Service | Description |
 |---|---|---|

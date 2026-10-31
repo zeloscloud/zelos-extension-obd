@@ -75,18 +75,23 @@ def _target(vehicle: str | None, ecu: str) -> tuple[Vehicle, int | None]:
     return v, v.parse_ecu(ecu)
 
 
+#: Failures that explain themselves: a down or busy link, no answer, bad input.
+FAILURES = (Unavailable, scan.NoAnswer, ValueError, TimeoutError, ConnectionError)
+
+
 def guarded(func: Callable[..., dict[str, Any]]) -> Callable[..., dict[str, Any]]:
-    """Errors as `{status: error, error}`: a down or busy link, no answer, bad input."""
+    """Failures raise, so the caller sees a failed run; any other error is logged and raised
+    as `<type>: <message>`."""
 
     @functools.wraps(func)
     def run(*args: Any, **kwargs: Any) -> dict[str, Any]:
         try:
             return func(*args, **kwargs)
-        except (Unavailable, scan.NoAnswer, ValueError, TimeoutError, ConnectionError) as e:
-            return {"status": "error", "error": str(e)}
+        except FAILURES:
+            raise
         except Exception as e:
             logger.exception("%s failed", func.__name__)
-            return {"status": "error", "error": f"{type(e).__name__}: {e}"}
+            raise RuntimeError(f"{type(e).__name__}: {e}") from e
 
     return run
 
