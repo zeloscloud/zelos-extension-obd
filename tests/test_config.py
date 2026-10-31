@@ -6,7 +6,12 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-from zelos_extension_obd.cli.app import ConfigError, create_vehicles, resolve_advanced
+from zelos_extension_obd.cli.app import (
+    ConfigError,
+    create_vehicles,
+    resolve_advanced,
+    run_app_mode,
+)
 
 SCHEMA = json.loads((Path(__file__).parent.parent / "config.schema.json").read_text())
 
@@ -47,3 +52,18 @@ def test_schema_takes_each_interface_and_create_vehicles_builds_them():
 def test_refused(vehicles, error):
     with pytest.raises(ConfigError, match=error):
         create_vehicles({"vehicles": vehicles}, resolve_advanced({}))
+
+
+def test_saved_settings_off_the_schema_stop_with_one_line(tmp_path, monkeypatch, caplog):
+    saved = tmp_path / "config.json"
+    saved.write_text(
+        json.dumps({"vehicles": [{"interface": "Demo"}], "advanced": {"p2_timeout": "slow"}})
+    )
+    monkeypatch.setenv("ZELOS_CONFIG_PATH", str(saved))
+    monkeypatch.chdir(Path(__file__).parent.parent)
+    with pytest.raises(SystemExit) as exc:
+        run_app_mode(demo=False, file=None)
+    assert exc.value.code == 1
+    assert [r.getMessage() for r in caplog.records if r.levelname == "ERROR"] == [
+        "Invalid configuration: advanced.p2_timeout: 'slow' is not of type 'number'"
+    ]
