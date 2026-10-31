@@ -1,8 +1,8 @@
 [project]
 name = "zelos-extension-obd"
 version = "0.1.1"
-description = "OBD-II scan tool extension for Zelos"
-authors = [{ name = "Zelos", email = "info@zeloscloud.io" }]
+description = "OBD-II scan tool over CAN (ISO 15765-4) or DoIP: live PIDs, stored, pending and permanent DTCs, freeze frame, readiness monitors, VIN and a confirm-gated DTC clear. J1979 and J1979-2; demo vehicle included."
+authors = [{ name = "Zelos", email = "support@zeloscloud.io" }]
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
@@ -20,8 +20,7 @@ classifiers = [
 dependencies = [
     "zelos-sdk>=0.0.13a1",
     "rich-click>=1.8.0",
-    # CAN bus runtime (`zelos_can.bus`), the diagnostics transports `zelos_can.isotp` and
-    # `zelos_can.doip` (extra `diag`) and the PID catalogue `zelos_can.obd`.
+    # Extra `diag`: the ISO-TP and DoIP transports.
     "zelos-can[python-can,diag]>=0.0.11a13",
     # NRC names in results.
     "udsoncan>=1.21.0",
@@ -31,13 +30,13 @@ dependencies = [
 Homepage = "https://github.com/zeloscloud/zelos-extension-obd"
 Repository = "https://github.com/zeloscloud/zelos-extension-obd"
 Issues = "https://github.com/zeloscloud/zelos-extension-obd/issues"
-Documentation = "https://docs.zeloscloud.io/extensions"
+Documentation = "https://docs.zeloscloud.io/app/extensions/"
 
 [dependency-groups]
 dev = [
-    "pytest>=8.4.2",
-    "pre-commit>=4.3.0",
-    "ruff>=0.14.2",
+    "pytest>=9.1.1",
+    "pre-commit>=4.6.2",
+    "ruff>=0.16.10",
     "jsonschema>=4.0.0",
 ]
 
@@ -73,6 +72,3 @@ select = [
 ignore = [
     "B008",   # function call in defaults (common in decorators)
 ]
-
-[tool.ruff.lint.pydocstyle]
-convention = "google"

@@ -276,7 +276,7 @@ class PendingForever(can.Listener):
 
 
 @pytest.mark.parametrize("case", ["split", "physical-11", "physical-29", "detect-29", "pending"])
-def test_wire_behaviour(case):
+def test_wire_behavior(case):
     """What only the extension decides on the wire, against the demo."""
     channel = f"obd-sanity-{next(_channels)}"
     extended = case.endswith("29")

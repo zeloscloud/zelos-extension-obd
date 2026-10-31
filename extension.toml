@@ -1,33 +1,24 @@
-# Zelos OBD-II Extension Manifest
-# See https://docs.zeloscloud.io/sdk/how-to/develop-extensions/ for full documentation
-
 name = "OBD"
 version = "0.1.1"
-description = "OBD-II scan tool: live PIDs, DTCs, readiness, vehicle info and a gated clear, over CAN or DoIP"
+description = "OBD-II scan tool over CAN (ISO 15765-4) or DoIP: live PIDs, stored, pending and permanent DTCs, freeze frame, readiness monitors, VIN and a confirm-gated DTC clear. J1979 and J1979-2; demo vehicle included."
 author = "Zelos"
 repository = "https://github.com/zeloscloud/zelos-extension-obd"
-homepage = "https://github.com/zeloscloud/zelos-extension-obd"
-keywords = ["obd", "obd-ii", "j1979", "obdonuds", "automotive", "diagnostics", "can", "doip"]
+# The marketplace search and Zelos AI find an extension by these words, its name and its description.
+keywords = ["obd", "obd-ii", "j1979", "obdonuds", "automotive", "diagnostics", "can", "doip", "obd2", "obdii", "obd ii", "obd on uds", "j1979-2", "iso 15031", "iso 15765", "iso 13400", "scan tool", "pid", "dtc", "check engine"]
 categories = ["Automotive", "Diagnostics"]
-
 icon = "assets/icon.png"
 readme = "README.md"
 
 [zelos]
-version = ">=26.0.8"
+version = ">=26.0.10"
 
 [config]
 schema = "config.schema.json"
 
-[host]
-type = "agent"
-
-[host.agent]
+[agent]
+runtime = "python"
 entry = "main.py"
 python_version = "3.11"
-
-[stop]
-grace_seconds = 10
 
 [package]
 paths = ["main.py", "zelos_extension_obd"]
