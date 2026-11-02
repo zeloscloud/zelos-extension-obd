@@ -7,7 +7,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 keywords = ["zelos", "extension", "obd", "obd-ii", "j1979", "diagnostics", "automotive", "can", "doip"]
 dependencies = [
-    "zelos-sdk>=0.0.13a1",
+    "zelos-sdk>=0.0.13",
     "rich-click>=1.8.0",
     # Extra `diag`: the ISO-TP and DoIP transports.
     "zelos-can[python-can,diag]>=0.0.11a13",
